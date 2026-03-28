@@ -1,0 +1,61 @@
+&GLOBAL
+  PRINT_LEVEL low
+  PROJECT_NAME he32_only
+  RUN_TYPE PINT
+&END GLOBAL
+
+&MOTION
+  &PINT
+    NUM_STEPS 5
+    &HELIUM
+      CELL_SHAPE OCTAHEDRON
+      HELIUM_ONLY
+      INOROT 200
+      IROT 100
+      NATOMS 32
+      NBEADS 25
+      NUM_ENV 2
+      PERIODIC T
+      POTENTIAL_FILE_NAME lj-test-pot.dat
+      PRESAMPLE T
+      SAMPLING_METHOD CEPERLEY
+      &CEPERLEY
+        BISECTION 8
+        MAX_PERM_CYCLE 4
+      &END CEPERLEY
+    &END HELIUM
+  &END PINT
+&END MOTION
+
+&FORCE_EVAL
+  METHOD FIST
+  &MM
+    &FORCEFIELD
+      PARMTYPE CHM
+      PARM_FILE_NAME ../../Fist/sample_pot/water.pot
+      &CHARGE
+        ATOM OT
+        CHARGE -0.8476
+      &END CHARGE
+      &CHARGE
+        ATOM HT
+        CHARGE 0.4238
+      &END CHARGE
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        GMAX 25
+      &END EWALD
+    &END POISSON
+  &END MM
+  &SUBSYS
+    &CELL
+      ABC 8.0 8.0 8.0
+      PERIODIC NONE
+    &END CELL
+    &TOPOLOGY
+      COORD_FILE_FORMAT PDB
+      COORD_FILE_NAME ../../Fist/sample_pdb/water_1.pdb
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

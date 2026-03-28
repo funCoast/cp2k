@@ -1,0 +1,148 @@
+&GLOBAL
+  PROJECT H2O-32_SPME_fixed_clv
+  RUN_TYPE MD
+&END GLOBAL
+
+&MOTION
+  &CONSTRAINT
+    SHAKE_TOL 1.0E-7
+    &COLLECTIVE
+      COLVAR 1
+      MOLECULE 1
+      &RESTRAINT
+        K 0.05
+      &END RESTRAINT
+    &END COLLECTIVE
+    &COLLECTIVE
+      COLVAR 2
+      MOLECULE 1
+      &RESTRAINT
+        K 0.05
+      &END RESTRAINT
+    &END COLLECTIVE
+    &COLLECTIVE
+      COLVAR 3
+      MOLECULE 1
+      &RESTRAINT
+        K 0.05
+      &END RESTRAINT
+    &END COLLECTIVE
+  &END CONSTRAINT
+  &MD
+    ENSEMBLE NVT
+    STEPS 100
+    TEMPERATURE 300.0
+    TIMESTEP 1.0
+    &PRINT
+      &CENTER_OF_MASS OFF
+      &END CENTER_OF_MASS
+      &PROGRAM_RUN_INFO
+        &EACH
+          MD 100
+        &END EACH
+      &END PROGRAM_RUN_INFO
+    &END PRINT
+    &THERMOSTAT
+      &NOSE
+        LENGTH 3
+        TIMECON 10
+        YOSHIDA 3
+      &END NOSE
+    &END THERMOSTAT
+  &END MD
+  &PRINT
+    &RESTART OFF
+    &END RESTART
+    &RESTART_HISTORY OFF
+    &END RESTART_HISTORY
+    &TRAJECTORY
+    &END TRAJECTORY
+    &VELOCITIES OFF
+    &END VELOCITIES
+  &END PRINT
+&END MOTION
+
+&FORCE_EVAL
+  METHOD Fist
+  &MM
+    &FORCEFIELD
+      &BEND
+        ATOMS H O H
+        K 0.
+        THETA0 1.8
+      &END BEND
+      &BOND
+        ATOMS O H
+        K 0.
+        R0 1.8
+      &END BOND
+      &CHARGE
+        ATOM O
+        CHARGE -0.8476
+      &END CHARGE
+      &CHARGE
+        ATOM H
+        CHARGE 0.4238
+      &END CHARGE
+      &NONBONDED
+        &LENNARD-JONES
+          ATOMS O O
+          EPSILON 78.198
+          RCUT 11.4
+          SIGMA 3.166
+        &END LENNARD-JONES
+        &LENNARD-JONES
+          ATOMS O H
+          EPSILON 0.0
+          RCUT 11.4
+          SIGMA 3.6705
+        &END LENNARD-JONES
+        &LENNARD-JONES
+          ATOMS H H
+          EPSILON 0.0
+          RCUT 11.4
+          SIGMA 3.30523
+        &END LENNARD-JONES
+      &END NONBONDED
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        ALPHA .5
+        EWALD_TYPE spme
+        GMAX 20
+        O_SPLINE 6
+      &END EWALD
+    &END POISSON
+    &PRINT
+      &DIPOLE OFF
+      &END DIPOLE
+      &PROGRAM_RUN_INFO OFF
+      &END PROGRAM_RUN_INFO
+    &END PRINT
+  &END MM
+  &SUBSYS
+    &CELL
+      ABC 9.865 9.865 9.865
+    &END CELL
+    &COLVAR
+      &XYZ_DIAG
+        ATOM 1
+      &END XYZ_DIAG
+    &END COLVAR
+    &COLVAR
+      &XYZ_DIAG
+        ATOM 2
+      &END XYZ_DIAG
+    &END COLVAR
+    &COLVAR
+      &XYZ_DIAG
+        ATOM 3
+      &END XYZ_DIAG
+    &END COLVAR
+    &COORD
+      O                  -4.583   5.333   1.560   FIX
+      H                  -3.777   5.331   0.943   FIX
+      H                  -5.081   4.589   1.176   FIX
+    &END COORD
+  &END SUBSYS
+&END FORCE_EVAL

@@ -1,0 +1,31 @@
+#!/bin/sh
+
+export LANG=C
+export LC_MESSAGES=C
+export LC_ALL=C
+
+# meant to be run with CP2K's src dir as first argument
+
+if [ -s "$1/../REVISION" ] ; then
+  cat "$1/../REVISION"
+  exit 0
+fi
+
+GIT_DIR="$1/../.git"
+GIT_HEAD="${GIT_DIR}/HEAD"
+
+if [ ! -s "${GIT_HEAD}" ] ; then
+  echo "unknown revision"
+  >&2 echo "WARNING: $0 failed to determine the Git commit and no REVISION file available"
+  exit 1
+fi
+
+REF="`awk '{print $2}' "${GIT_HEAD}"`"
+
+# if there is no second column, then we're in a detached HEAD
+# and the file contains the revision
+if [ -z "${REF}" ] ; then
+  echo "git:`head -c 7 "${GIT_HEAD}"`"
+else
+  echo "git:`head -c 7 "${GIT_DIR}/${REF}"`"
+fi

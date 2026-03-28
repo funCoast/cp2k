@@ -1,0 +1,56 @@
+{
+    "version": 6,
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "displayName": "Base Config",
+            "description": "Cross-platform base preset; machine-specific paths belong in CMakeUserPresets.json",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "environment": {
+                "VCPKG_FORCE_SYSTEM_BINARIES": "1"
+            },
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "ENABLE_MY_ASSERT": "ON",
+                "COSTMODEL_AUTOGEN": "ON"
+            }
+        },
+        {
+            "name": "vcpkg",
+            "hidden": true,
+            "displayName": "Vcpkg Config",
+            "description": "Base preset with the vcpkg toolchain configured from VCPKG_ROOT",
+            "inherits": [
+                "base"
+            ],
+            "cacheVariables": {
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+            }
+        },
+        {
+            "name": "gcc",
+            "displayName": "GCC Config",
+            "description": "Cross-platform GCC preset that relies on compiler names from PATH",
+            "inherits": [
+                "vcpkg"
+            ],
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++"
+            }
+        },
+        {
+            "name": "llvm",
+            "displayName": "LLVM Config",
+            "description": "Cross-platform Clang preset that relies on compiler names from PATH",
+            "inherits": [
+                "vcpkg"
+            ],
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++"
+            }
+        }
+    ]
+}

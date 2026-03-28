@@ -1,0 +1,64 @@
+&GLOBAL
+  PROJECT H2O-MNDO-KDSOd
+  RUN_TYPE DEBUG
+&END GLOBAL
+
+&DEBUG
+&END DEBUG
+
+&FORCE_EVAL
+  METHOD Quickstep
+  &DFT
+    &QS
+      METHOD MNDO
+      &SE
+        INTEGRAL_SCREENING KDSO-D
+        &COULOMB
+          CUTOFF [angstrom] 6.0
+          RC_RANGE [angstrom] 0.1
+        &END COULOMB
+        &EXCHANGE
+          CUTOFF [angstrom] 6.0
+          RC_RANGE [angstrom] 0.1
+          RC_TAPER [angstrom] 6.0
+        &END EXCHANGE
+        &PRINT
+          &EWALD_INFO
+          &END EWALD_INFO
+        &END PRINT
+        &SCREENING
+          RC_RANGE [angstrom] 0.1
+          RC_TAPER [angstrom] 6.0
+        &END SCREENING
+      &END SE
+    &END QS
+    &SCF
+      EPS_SCF 1.0E-6
+      MAX_SCF 40
+      SCF_GUESS MOPAC
+      &OT
+        MINIMIZER DIIS
+        PRECONDITIONER FULL_SINGLE_INVERSE
+      &END OT
+      &OUTER_SCF
+        EPS_SCF 1.0E-6
+        MAX_SCF 5
+      &END OUTER_SCF
+      &PRINT
+        &RESTART OFF
+        &END RESTART
+      &END PRINT
+    &END SCF
+  &END DFT
+  &SUBSYS
+    &CELL
+      ABC [angstrom] 10.0 10.0 10.0
+      PERIODIC NONE
+    &END CELL
+    &COORD
+      O   0.000000    0.000000    0.0
+      H   0.000000   -0.757136    0.520545
+      H   0.000000    0.757136    0.520545
+    &END COORD
+  &END SUBSYS
+&END FORCE_EVAL

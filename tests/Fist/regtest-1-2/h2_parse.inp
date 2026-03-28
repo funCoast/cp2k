@@ -1,0 +1,65 @@
+&GLOBAL
+  PROJECT h2_parse
+  RUN_TYPE GEO_OPT
+&END GLOBAL
+
+&MOTION
+  &GEO_OPT
+    MAX_ITER 1
+  &END GEO_OPT
+&END MOTION
+
+&FORCE_EVAL
+  METHOD FIST
+  &MM
+    &FORCEFIELD
+      &BOND
+        ATOMS H H
+        K 1.0
+        KIND HARMONIC
+        R0 [angstrom] 0.74
+      &END BOND
+      &CHARGE
+        ATOM H
+        CHARGE 0.0
+      &END CHARGE
+      &NONBONDED
+        &GENPOT
+          ATOMS H H
+          FUNCTION 0.0
+          VARIABLES r
+        &END GENPOT
+      &END NONBONDED
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        EWALD_TYPE NONE
+      &END EWALD
+    &END POISSON
+  &END MM
+  &PRINT
+    &FORCES
+    &END FORCES
+  &END PRINT
+  &SUBSYS
+    &CELL
+      # parse the exponential format without dot
+      ABC 10 10 1.E1
+      PERIODIC NONE
+    &END CELL
+    &COORD
+      H  0.0  0.0  0.3
+      H  0.0  0.0 -0.3
+    &END COORD
+    &PRINT
+      &TOPOLOGY_INFO
+        GENERATE_INFO T
+      &END TOPOLOGY_INFO
+    &END PRINT
+    &TOPOLOGY
+      &GENERATE
+        CREATE_MOLECULES T
+      &END GENERATE
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

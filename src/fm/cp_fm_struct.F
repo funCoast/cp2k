@@ -1,0 +1,955 @@
+!--------------------------------------------------------------------------------------------------!
+!   CP2K: A general program to perform molecular dynamics simulations                              !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
+!                                                                                                  !
+!   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
+!--------------------------------------------------------------------------------------------------!
+
+! **************************************************************************************************
+!> \brief represent the structure of a full matrix
+!> \par History
+!>      08.2002 created [fawzi]
+!> \author Fawzi Mohamed
+! **************************************************************************************************
+MODULE cp_fm_struct
+   USE cp_blacs_env,                    ONLY: cp_blacs_env_release,&
+                                              cp_blacs_env_type
+   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
+                                              cp_logger_get_default_unit_nr,&
+                                              cp_logger_type,&
+                                              cp_to_string
+   USE machine,                         ONLY: m_cpuid_vlen,&
+                                              m_flush
+   USE message_passing,                 ONLY: mp_para_env_release,&
+                                              mp_para_env_type
+#include "../base/base_uses.f90"
+
+   IMPLICIT NONE
+   PRIVATE
+
+   LOGICAL, PRIVATE, PARAMETER :: debug_this_module = .TRUE.
+   CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'cp_fm_struct'
+
+! the default blacs block sizes
+! consider using #ifdefs to give them the optimal values
+! these can be changed using scf_control
+! *** these are used by default
+   INTEGER, PRIVATE :: optimal_blacs_col_block_size = 64
+   INTEGER, PRIVATE :: optimal_blacs_row_block_size = 64
+   LOGICAL, PRIVATE :: force_block_size = .FALSE.
+
+   PUBLIC :: cp_fm_struct_type, cp_fm_struct_p_type
+   PUBLIC :: cp_fm_struct_create, cp_fm_struct_retain, cp_fm_struct_release, &
+             cp_fm_struct_equivalent, &
+             cp_fm_struct_get, cp_fm_struct_double, cp_fm_struct_config, &
+             cp_fm_struct_get_nrow_block, cp_fm_struct_get_ncol_block, &
+             cp_fm_struct_write_info
+
+! **************************************************************************************************
+!> \brief keeps the information about the structure of a full matrix
+!> \param para_env the parallel environment of the matrices with this structure
+!> \param context the blacs context (parallel environment for scalapack),
+!>        should be compatible with para_env
+!> \param descriptor the scalapack descriptor of the matrices, when using
+!>        scalapack (ncol_block=descriptor(6), ncol_global=descriptor(4),
+!>        nrow_block=descriptor(5), nrow_global=descriptor(3))
+!> \param ncol_block number of columns of a scalapack block
+!> \param nrow_block number of rows of a scalapack block
+!> \param nrow_global number of rows of the matrix
+!> \param ncol_global number of rows
+!> \param first_p_pos position of the first processor (for scalapack)
+!> \param row_indices real (global) indices of the rows (defined only for
+!>        the local rows really used)
+!> \param col_indices real (global) indices of the cols (defined only for
+!>        the local cols really used)
+!> \param nrow_locals nrow_locals(i) number of local rows of the matrix really
+!>        used on the processors with context%mepos(1)==i
+!> \param ncol_locals ncol_locals(i) number of local rows of the matrix really
+!>        used on the processors with context%mepos(2)==i
+!> \param ref_count reference count (see doc/ReferenceCounting.html)
+!> \param local_leading_dimension leading dimension of the data that is
+!>        stored on this processor
+!>
+!>      readonly attributes:
+!> \param nrow_local number of local rows really used on the actual processor
+!> \param ncol_local number of local cols really used on the actual processor
+!> \note
+!>      use cp_fm_struct_get to extract information from this structure
+!> \par History
+!>      08.2002 created [fawzi]
+!> \author Fawzi Mohamed
+! **************************************************************************************************
+   TYPE cp_fm_struct_type
+      TYPE(mp_para_env_type), POINTER :: para_env => NULL()
+      TYPE(cp_blacs_env_type), POINTER :: context => NULL()
+      INTEGER, DIMENSION(9) :: descriptor = -1
+      INTEGER :: nrow_block = -1, ncol_block = -1, nrow_global = -1, ncol_global = -1
+      INTEGER, DIMENSION(2) :: first_p_pos = -1
+      INTEGER, DIMENSION(:), POINTER :: row_indices => NULL(), col_indices => NULL(), &
+                                        nrow_locals => NULL(), ncol_locals => NULL()
+      INTEGER :: ref_count = -1, local_leading_dimension = -1
+   CONTAINS
+      PROCEDURE, PASS(struct), NON_OVERRIDABLE :: g2p_row => cp_fm_indxg2p_row
+      PROCEDURE, PASS(struct), NON_OVERRIDABLE :: g2p_col => cp_fm_indxg2p_col
+      PROCEDURE, PASS(struct), NON_OVERRIDABLE :: g2l_row => cp_fm_indxg2l_row
+      PROCEDURE, PASS(struct), NON_OVERRIDABLE :: g2l_col => cp_fm_indxg2l_col
+      PROCEDURE, PASS(struct), NON_OVERRIDABLE :: l2g_row => cp_fm_indxl2g_row
+      PROCEDURE, PASS(struct), NON_OVERRIDABLE :: l2g_col => cp_fm_indxl2g_col
+   END TYPE cp_fm_struct_type
+! **************************************************************************************************
+   TYPE cp_fm_struct_p_type
+      TYPE(cp_fm_struct_type), POINTER :: struct => NULL()
+   END TYPE cp_fm_struct_p_type
+
+CONTAINS
+
+! **************************************************************************************************
+!> \brief allocates and initializes a full matrix structure
+!> \param fmstruct the pointer that will point to the new structure
+!> \param para_env the parallel environment
+!> \param context the blacs context of this matrix
+!> \param nrow_global the number of row of the full matrix
+!> \param ncol_global the number of columns of the full matrix
+!> \param nrow_block the number of rows of a block of the matrix,
+!>        omit or set to -1 to use the built-in defaults
+!> \param ncol_block the number of columns of a block of the matrix,
+!>        omit or set to -1 to use the built-in defaults
+!> \param descriptor the scalapack descriptor of the matrix (if not given
+!>        a new one is allocated
+!> \param first_p_pos ...
+!> \param local_leading_dimension the leading dimension of the locally stored
+!>        data block
+!> \param template_fmstruct a matrix structure where to take the default values
+!> \param square_blocks ...
+!> \param force_block ...
+!> \par History
+!>      08.2002 created [fawzi]
+!> \author Fawzi Mohamed
+! **************************************************************************************************
+   SUBROUTINE cp_fm_struct_create(fmstruct, para_env, context, nrow_global, &
+                                  ncol_global, nrow_block, ncol_block, descriptor, first_p_pos, &
+                                  local_leading_dimension, template_fmstruct, square_blocks, force_block)
+
+      TYPE(cp_fm_struct_type), POINTER             :: fmstruct
+      TYPE(mp_para_env_type), TARGET, OPTIONAL     :: para_env
+      INTEGER, INTENT(in), OPTIONAL                :: nrow_global, ncol_global
+      INTEGER, INTENT(in), OPTIONAL                :: nrow_block, ncol_block
+      INTEGER, INTENT(in), OPTIONAL                :: local_leading_dimension
+      TYPE(cp_blacs_env_type), TARGET, OPTIONAL    :: context
+      INTEGER, DIMENSION(9), INTENT(in), OPTIONAL  :: descriptor
+      INTEGER, OPTIONAL, DIMENSION(2)              :: first_p_pos
+      TYPE(cp_fm_struct_type), TARGET, OPTIONAL    :: template_fmstruct
+      LOGICAL, OPTIONAL, INTENT(in)                :: square_blocks
+      LOGICAL, OPTIONAL, INTENT(in)                :: force_block
+
+      INTEGER                                      :: i, nmax_block, vlen
+#if defined(__parallel)
+      INTEGER                                      :: iunit, stat
+      INTEGER, EXTERNAL                            :: numroc
+      TYPE(cp_logger_type), POINTER                :: logger
+#endif
+
+      LOGICAL :: my_square_blocks, my_force_block
+
+      ALLOCATE (fmstruct)
+
+      IF (.NOT. PRESENT(template_fmstruct)) THEN
+         CPASSERT(PRESENT(context))
+         CPASSERT(PRESENT(nrow_global))
+         CPASSERT(PRESENT(ncol_global))
+         fmstruct%local_leading_dimension = 1
+         fmstruct%nrow_block = 0 ! populate default later
+         fmstruct%ncol_block = 0 ! populate default later
+      ELSE
+         fmstruct%context => template_fmstruct%context
+         fmstruct%para_env => template_fmstruct%para_env
+         fmstruct%descriptor = template_fmstruct%descriptor
+         fmstruct%nrow_block = template_fmstruct%nrow_block
+         fmstruct%nrow_global = template_fmstruct%nrow_global
+         fmstruct%ncol_block = template_fmstruct%ncol_block
+         fmstruct%ncol_global = template_fmstruct%ncol_global
+         fmstruct%first_p_pos = template_fmstruct%first_p_pos
+         fmstruct%local_leading_dimension = &
+            template_fmstruct%local_leading_dimension
+      END IF
+
+      ! allow to request default block size (zero or negative value)
+      IF (PRESENT(nrow_block)) fmstruct%nrow_block = nrow_block
+      IF (PRESENT(ncol_block)) fmstruct%ncol_block = ncol_block
+      IF (0 >= fmstruct%nrow_block) THEN
+         fmstruct%nrow_block = optimal_blacs_row_block_size
+      END IF
+      IF (0 >= fmstruct%ncol_block) THEN
+         fmstruct%ncol_block = optimal_blacs_col_block_size
+      END IF
+      CPASSERT(0 < fmstruct%nrow_block .AND. 0 < fmstruct%ncol_block)
+
+      IF (PRESENT(context)) THEN
+         fmstruct%context => context
+         fmstruct%para_env => context%para_env
+      END IF
+      IF (PRESENT(para_env)) fmstruct%para_env => para_env
+      CALL fmstruct%context%retain()
+      CALL fmstruct%para_env%retain()
+
+      IF (PRESENT(nrow_global)) THEN
+         fmstruct%nrow_global = nrow_global
+         fmstruct%local_leading_dimension = 1
+      END IF
+      IF (PRESENT(ncol_global)) THEN
+         fmstruct%ncol_global = ncol_global
+      END IF
+
+      my_force_block = force_block_size
+      IF (PRESENT(force_block)) my_force_block = force_block
+      IF (.NOT. my_force_block) THEN
+         vlen = m_cpuid_vlen()
+         nmax_block = (fmstruct%nrow_global + fmstruct%context%num_pe(1) - 1)/ &
+                      (fmstruct%context%num_pe(1))
+         IF (1 < vlen) THEN ! flooring not ceiling (OOB)
+            fmstruct%nrow_block = fmstruct%nrow_block/vlen*vlen
+            nmax_block = nmax_block/vlen*vlen
+         END IF
+         fmstruct%nrow_block = MAX(MIN(fmstruct%nrow_block, nmax_block), 1)
+
+         nmax_block = (fmstruct%ncol_global + fmstruct%context%num_pe(2) - 1)/ &
+                      (fmstruct%context%num_pe(2))
+         IF (1 < vlen) THEN ! flooring not ceiling (OOB)
+            fmstruct%ncol_block = fmstruct%ncol_block/vlen*vlen
+            nmax_block = nmax_block/vlen*vlen
+         END IF
+         fmstruct%ncol_block = MAX(MIN(fmstruct%ncol_block, nmax_block), 1)
+      END IF
+
+      ! square matrix -> square blocks (otherwise, e.g., PDPOTRF fails)
+      my_square_blocks = fmstruct%nrow_global == fmstruct%ncol_global
+      ! however, requesting non-square blocks takes precedence
+      IF (PRESENT(square_blocks)) my_square_blocks = square_blocks
+      IF (my_square_blocks) THEN
+         fmstruct%nrow_block = MIN(fmstruct%nrow_block, fmstruct%ncol_block)
+         fmstruct%ncol_block = fmstruct%nrow_block
+      END IF
+
+      ALLOCATE (fmstruct%nrow_locals(0:(fmstruct%context%num_pe(1) - 1)), &
+                fmstruct%ncol_locals(0:(fmstruct%context%num_pe(2) - 1)))
+      IF (.NOT. PRESENT(template_fmstruct)) &
+         fmstruct%first_p_pos = [0, 0]
+      IF (PRESENT(first_p_pos)) fmstruct%first_p_pos = first_p_pos
+
+      fmstruct%nrow_locals = 0
+      fmstruct%ncol_locals = 0
+#if defined(__parallel)
+      fmstruct%nrow_locals(fmstruct%context%mepos(1)) = &
+         numroc(fmstruct%nrow_global, fmstruct%nrow_block, &
+                fmstruct%context%mepos(1), fmstruct%first_p_pos(1), &
+                fmstruct%context%num_pe(1))
+      fmstruct%ncol_locals(fmstruct%context%mepos(2)) = &
+         numroc(fmstruct%ncol_global, fmstruct%ncol_block, &
+                fmstruct%context%mepos(2), fmstruct%first_p_pos(2), &
+                fmstruct%context%num_pe(2))
+      CALL fmstruct%para_env%sum(fmstruct%nrow_locals)
+      CALL fmstruct%para_env%sum(fmstruct%ncol_locals)
+      fmstruct%nrow_locals(:) = fmstruct%nrow_locals(:)/fmstruct%context%num_pe(2)
+      fmstruct%ncol_locals(:) = fmstruct%ncol_locals(:)/fmstruct%context%num_pe(1)
+
+      IF (SUM(fmstruct%ncol_locals) /= fmstruct%ncol_global .OR. &
+          SUM(fmstruct%nrow_locals) /= fmstruct%nrow_global) THEN
+         ! try to collect some output if this is going to happen again
+         ! this seems to trigger on blanc, but should really never happen
+         logger => cp_get_default_logger()
+         iunit = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
+         WRITE (iunit, *) "mepos", fmstruct%context%mepos(1:2), "numpe", fmstruct%context%num_pe(1:2)
+         WRITE (iunit, *) "ncol_global", fmstruct%ncol_global
+         WRITE (iunit, *) "nrow_global", fmstruct%nrow_global
+         WRITE (iunit, *) "ncol_locals", fmstruct%ncol_locals
+         WRITE (iunit, *) "nrow_locals", fmstruct%nrow_locals
+         CALL m_flush(iunit)
+      END IF
+
+      IF (SUM(fmstruct%ncol_locals) /= fmstruct%ncol_global) &
+         CPABORT("sum of local cols not equal global cols")
+      IF (SUM(fmstruct%nrow_locals) /= fmstruct%nrow_global) &
+         CPABORT("sum of local row not equal global rows")
+#else
+      ! block = full matrix
+      fmstruct%nrow_block = fmstruct%nrow_global
+      fmstruct%ncol_block = fmstruct%ncol_global
+      fmstruct%nrow_locals(fmstruct%context%mepos(1)) = fmstruct%nrow_global
+      fmstruct%ncol_locals(fmstruct%context%mepos(2)) = fmstruct%ncol_global
+#endif
+
+      fmstruct%local_leading_dimension = MAX(fmstruct%local_leading_dimension, &
+                                             fmstruct%nrow_locals(fmstruct%context%mepos(1)))
+      IF (PRESENT(local_leading_dimension)) THEN
+         IF (MAX(1, fmstruct%nrow_locals(fmstruct%context%mepos(1))) > local_leading_dimension) &
+            CALL cp_abort(__LOCATION__, "local_leading_dimension too small ("// &
+                          cp_to_string(local_leading_dimension)//"<"// &
+                          cp_to_string(fmstruct%local_leading_dimension)//")")
+         fmstruct%local_leading_dimension = local_leading_dimension
+      END IF
+
+      NULLIFY (fmstruct%row_indices, fmstruct%col_indices)
+
+      ! the max should go away
+      ALLOCATE (fmstruct%row_indices(MAX(fmstruct%nrow_locals(fmstruct%context%mepos(1)), 1)))
+      DO i = 1, SIZE(fmstruct%row_indices)
+#ifdef __parallel
+         fmstruct%row_indices(i) = fmstruct%l2g_row(i, fmstruct%context%mepos(1))
+#else
+         fmstruct%row_indices(i) = i
+#endif
+      END DO
+      ALLOCATE (fmstruct%col_indices(MAX(fmstruct%ncol_locals(fmstruct%context%mepos(2)), 1)))
+      DO i = 1, SIZE(fmstruct%col_indices)
+#ifdef __parallel
+         fmstruct%col_indices(i) = fmstruct%l2g_col(i, fmstruct%context%mepos(2))
+#else
+         fmstruct%col_indices(i) = i
+#endif
+      END DO
+
+      fmstruct%ref_count = 1
+
+      IF (PRESENT(descriptor)) THEN
+         fmstruct%descriptor = descriptor
+      ELSE
+         fmstruct%descriptor = 0
+#if defined(__parallel)
+         ! local leading dimension needs to be at least 1
+         CALL descinit(fmstruct%descriptor, fmstruct%nrow_global, &
+                       fmstruct%ncol_global, fmstruct%nrow_block, &
+                       fmstruct%ncol_block, fmstruct%first_p_pos(1), &
+                       fmstruct%first_p_pos(2), fmstruct%context, &
+                       fmstruct%local_leading_dimension, stat)
+         CPASSERT(stat == 0)
+#endif
+      END IF
+   END SUBROUTINE cp_fm_struct_create
+
+! **************************************************************************************************
+!> \brief retains a full matrix structure
+!> \param fmstruct the structure to retain
+!> \par History
+!>      08.2002 created [fawzi]
+!> \author Fawzi Mohamed
+! **************************************************************************************************
+   SUBROUTINE cp_fm_struct_retain(fmstruct)
+      TYPE(cp_fm_struct_type), INTENT(INOUT)             :: fmstruct
+
+      CPASSERT(fmstruct%ref_count > 0)
+      fmstruct%ref_count = fmstruct%ref_count + 1
+   END SUBROUTINE cp_fm_struct_retain
+
+! **************************************************************************************************
+!> \brief releases a full matrix structure
+!> \param fmstruct the structure to release
+!> \par History
+!>      08.2002 created [fawzi]
+!> \author Fawzi Mohamed
+! **************************************************************************************************
+   SUBROUTINE cp_fm_struct_release(fmstruct)
+      TYPE(cp_fm_struct_type), POINTER                   :: fmstruct
+
+      IF (ASSOCIATED(fmstruct)) THEN
+         CPASSERT(fmstruct%ref_count > 0)
+         fmstruct%ref_count = fmstruct%ref_count - 1
+         IF (fmstruct%ref_count < 1) THEN
+            CALL cp_blacs_env_release(fmstruct%context)
+            CALL mp_para_env_release(fmstruct%para_env)
+            IF (ASSOCIATED(fmstruct%row_indices)) THEN
+               DEALLOCATE (fmstruct%row_indices)
+            END IF
+            IF (ASSOCIATED(fmstruct%col_indices)) THEN
+               DEALLOCATE (fmstruct%col_indices)
+            END IF
+            IF (ASSOCIATED(fmstruct%nrow_locals)) THEN
+               DEALLOCATE (fmstruct%nrow_locals)
+            END IF
+            IF (ASSOCIATED(fmstruct%ncol_locals)) THEN
+               DEALLOCATE (fmstruct%ncol_locals)
+            END IF
+            DEALLOCATE (fmstruct)
+         END IF
+      END IF
+      NULLIFY (fmstruct)
+   END SUBROUTINE cp_fm_struct_release
+
+! **************************************************************************************************
+!> \brief returns true if the two matrix structures are equivalent, false
+!>      otherwise.
+!> \param fmstruct1 one of the full matrix structures to compare
+!> \param fmstruct2 the second of the full matrix structures to compare
+!> \return ...
+!> \par History
+!>      08.2002 created [fawzi]
+!> \author Fawzi Mohamed
+! **************************************************************************************************
+   FUNCTION cp_fm_struct_equivalent(fmstruct1, fmstruct2) RESULT(res)
+      TYPE(cp_fm_struct_type), POINTER                   :: fmstruct1, fmstruct2
+      LOGICAL                                            :: res
+
+      INTEGER                                            :: i
+
+      CPASSERT(ASSOCIATED(fmstruct1))
+      CPASSERT(ASSOCIATED(fmstruct2))
+      CPASSERT(fmstruct1%ref_count > 0)
+      CPASSERT(fmstruct2%ref_count > 0)
+      IF (ASSOCIATED(fmstruct1, fmstruct2)) THEN
+         res = .TRUE.
+      ELSE
+         res = (fmstruct1%context == fmstruct2%context) .AND. &
+               (fmstruct1%nrow_global == fmstruct2%nrow_global) .AND. &
+               (fmstruct1%ncol_global == fmstruct2%ncol_global) .AND. &
+               (fmstruct1%nrow_block == fmstruct2%nrow_block) .AND. &
+               (fmstruct1%ncol_block == fmstruct2%ncol_block) .AND. &
+               (fmstruct1%local_leading_dimension == &
+                fmstruct2%local_leading_dimension)
+         DO i = 1, 9
+            res = res .AND. (fmstruct1%descriptor(i) == fmstruct1%descriptor(i))
+         END DO
+      END IF
+   END FUNCTION cp_fm_struct_equivalent
+
+! **************************************************************************************************
+!> \brief returns the values of various attributes of the matrix structure
+!> \param fmstruct the structure you want info about
+!> \param para_env ...
+!> \param context ...
+!> \param descriptor ...
+!> \param ncol_block ...
+!> \param nrow_block ...
+!> \param nrow_global ...
+!> \param ncol_global ...
+!> \param first_p_pos ...
+!> \param row_indices ...
+!> \param col_indices ...
+!> \param nrow_local ...
+!> \param ncol_local ...
+!> \param nrow_locals ...
+!> \param ncol_locals ...
+!> \param local_leading_dimension ...
+!> \par History
+!>      08.2002 created [fawzi]
+!> \author Fawzi Mohamed
+! **************************************************************************************************
+   SUBROUTINE cp_fm_struct_get(fmstruct, para_env, context, &
+                               descriptor, ncol_block, nrow_block, nrow_global, &
+                               ncol_global, first_p_pos, row_indices, &
+                               col_indices, nrow_local, ncol_local, nrow_locals, ncol_locals, &
+                               local_leading_dimension)
+      TYPE(cp_fm_struct_type), INTENT(IN)                :: fmstruct
+      TYPE(mp_para_env_type), OPTIONAL, POINTER          :: para_env
+      TYPE(cp_blacs_env_type), OPTIONAL, POINTER         :: context
+      INTEGER, DIMENSION(9), INTENT(OUT), OPTIONAL       :: descriptor
+      INTEGER, INTENT(out), OPTIONAL                     :: ncol_block, nrow_block, nrow_global, &
+                                                            ncol_global
+      INTEGER, DIMENSION(2), INTENT(out), OPTIONAL       :: first_p_pos
+      INTEGER, DIMENSION(:), OPTIONAL, POINTER           :: row_indices, col_indices
+      INTEGER, INTENT(out), OPTIONAL                     :: nrow_local, ncol_local
+      INTEGER, DIMENSION(:), OPTIONAL, POINTER           :: nrow_locals, ncol_locals
+      INTEGER, INTENT(out), OPTIONAL                     :: local_leading_dimension
+
+      IF (PRESENT(para_env)) para_env => fmstruct%para_env
+      IF (PRESENT(context)) context => fmstruct%context
+      IF (PRESENT(descriptor)) descriptor = fmstruct%descriptor
+      IF (PRESENT(ncol_block)) ncol_block = fmstruct%ncol_block
+      IF (PRESENT(nrow_block)) nrow_block = fmstruct%nrow_block
+      IF (PRESENT(nrow_global)) nrow_global = fmstruct%nrow_global
+      IF (PRESENT(ncol_global)) ncol_global = fmstruct%ncol_global
+      IF (PRESENT(first_p_pos)) first_p_pos = fmstruct%first_p_pos
+      IF (PRESENT(nrow_locals)) nrow_locals => fmstruct%nrow_locals
+      IF (PRESENT(ncol_locals)) ncol_locals => fmstruct%ncol_locals
+      IF (PRESENT(local_leading_dimension)) local_leading_dimension = &
+         fmstruct%local_leading_dimension
+
+      IF (PRESENT(nrow_local)) nrow_local = fmstruct%nrow_locals(fmstruct%context%mepos(1))
+      IF (PRESENT(ncol_local)) ncol_local = fmstruct%ncol_locals(fmstruct%context%mepos(2))
+
+      IF (PRESENT(row_indices)) row_indices => fmstruct%row_indices
+      IF (PRESENT(col_indices)) col_indices => fmstruct%col_indices
+   END SUBROUTINE cp_fm_struct_get
+
+! **************************************************************************************************
+!> \brief Write nicely formatted info about the FM struct to the given I/O unit
+!> \param fmstruct a cp_fm_struct_type instance
+!> \param io_unit the I/O unit to use for writing
+! **************************************************************************************************
+   SUBROUTINE cp_fm_struct_write_info(fmstruct, io_unit)
+      TYPE(cp_fm_struct_type), INTENT(IN)                :: fmstruct
+      INTEGER, INTENT(IN)                                :: io_unit
+
+      INTEGER, PARAMETER                                 :: oblock_size = 8
+
+      CHARACTER(len=30)                                  :: fm
+      INTEGER                                            :: oblock
+
+      WRITE (fm, "(A,I2,A)") "(A,I5,A,I5,A,", oblock_size, "I6)"
+
+      WRITE (io_unit, '(A,I12)') "CP_FM_STRUCT | No. of matrix columns:   ", fmstruct%ncol_global
+      WRITE (io_unit, '(A,I12)') "CP_FM_STRUCT | No. of matrix rows:      ", fmstruct%nrow_global
+      WRITE (io_unit, '(A,I12)') "CP_FM_STRUCT | No. of block columns:    ", fmstruct%ncol_block
+      WRITE (io_unit, '(A,I12)') "CP_FM_STRUCT | No. of block rows:       ", fmstruct%nrow_block
+
+      WRITE (io_unit, '(A)') "CP_FM_STRUCT | Number of local columns: "
+      DO oblock = 0, (SIZE(fmstruct%ncol_locals) - 1)/oblock_size
+         WRITE (io_unit, fm) "CP_FM_STRUCT | CPUs ", &
+            oblock*oblock_size, "..", (oblock + 1)*oblock_size - 1, ": ", &
+            fmstruct%ncol_locals(oblock*oblock_size:MIN(SIZE(fmstruct%ncol_locals), (oblock + 1)*oblock_size) - 1)
+      END DO
+
+      WRITE (io_unit, '(A)') "CP_FM_STRUCT | Number of local rows:    "
+      DO oblock = 0, (SIZE(fmstruct%nrow_locals) - 1)/oblock_size
+         WRITE (io_unit, fm) "CP_FM_STRUCT | CPUs ", &
+            oblock*oblock_size, "..", (oblock + 1)*oblock_size - 1, ": ", &
+            fmstruct%nrow_locals(oblock*oblock_size:MIN(SIZE(fmstruct%nrow_locals), (oblock + 1)*oblock_size) - 1)
+      END DO
+   END SUBROUTINE cp_fm_struct_write_info
+
+! **************************************************************************************************
+!> \brief creates a struct with twice the number of blocks on each core.
+!>        If matrix A has to be multiplied with B anc C, a
+!>        significant speedup of pdgemm can be acchieved by joining the matrices
+!>        in a new one with this structure (see arnoldi in rt_matrix_exp)
+!> \param fmstruct the struct to create
+!> \param struct struct of either A or B
+!> \param context ...
+!> \param col in which direction the matrix should be enlarged
+!> \param row in which direction the matrix should be enlarged
+!> \par History
+!>      06.2009 created [fschiff]
+!> \author Florian Schiffmann
+! **************************************************************************************************
+   SUBROUTINE cp_fm_struct_double(fmstruct, struct, context, col, row)
+      TYPE(cp_fm_struct_type), POINTER                   :: fmstruct
+      TYPE(cp_fm_struct_type), INTENT(INOUT)             :: struct
+      TYPE(cp_blacs_env_type), INTENT(INOUT), TARGET     :: context
+      LOGICAL, INTENT(in)                                :: col, row
+
+      INTEGER :: n_doubled_items_in_partially_filled_block, ncol_block, ncol_global, newdim_col, &
+         newdim_row, nfilled_blocks, nfilled_blocks_remain, nprocs_col, nprocs_row, nrow_block, &
+         nrow_global
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+
+      CALL cp_fm_struct_get(struct, nrow_global=nrow_global, &
+                            ncol_global=ncol_global, nrow_block=nrow_block, &
+                            ncol_block=ncol_block)
+      newdim_row = nrow_global
+      newdim_col = ncol_global
+      nprocs_row = context%num_pe(1)
+      nprocs_col = context%num_pe(2)
+      para_env => struct%para_env
+
+      IF (col) THEN
+         IF (ncol_global == 0) THEN
+            newdim_col = 0
+         ELSE
+            ! ncol_block            nfilled_blocks_remain * ncol_block
+            !     |<--->|           |<--->|
+            !     |-----|-----|-----|-----|---|
+            !     |  0  |  1  |  2  |  0  | 1 | <- context%mepos(2)
+            !     |-----|-----|-----|-----|---|
+            !     |<--- nfilled_blocks -->|<->  -- items (columns) in partially filled blocks
+            !     |     * ncol_block      |
+            n_doubled_items_in_partially_filled_block = 2*MOD(ncol_global, ncol_block)
+            nfilled_blocks = ncol_global/ncol_block
+            nfilled_blocks_remain = MOD(nfilled_blocks, nprocs_col)
+            newdim_col = 2*(nfilled_blocks/nprocs_col)
+            IF (n_doubled_items_in_partially_filled_block > ncol_block) THEN
+               ! doubled number of columns in a partially filled block does not fit into a single block.
+               ! Due to cyclic distribution of ScaLAPACK blocks, an extra block for each core needs to be added
+               ! |-----|-----|-----|----|     |-----|-----|-----|-----|-----|-----|-----|-----|-----|---|
+               ! |  0  |  1  |  2  |  0 | --> |  0  |  1  |  2  |  0  |  1  |  2  |  0  |  1  |  2  |  0|
+               ! |-----|-----|-----|----|     |-----|-----|-----|-----|-----|-----|-----|-----|-----|---|
+               !    a     a     a     b          a1    a1    a1    a2    a2    a2    b1  empty empty  b2
+               newdim_col = newdim_col + 1
+
+               ! the number of columns which does not fit into the added extra block
+               n_doubled_items_in_partially_filled_block = n_doubled_items_in_partially_filled_block - ncol_block
+            ELSE IF (nfilled_blocks_remain > 0) THEN
+               ! |-----|-----|-----|-----|--|    |-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|
+               ! |  0  |  1  |  2  |  0  | 1| -> |  0  |  1  |  2  |  0  |  1  |  2  |  0  |  1  |  2  |  0  |
+               ! |-----|-----|-----|-----|--|    |-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|
+               !    a     a     a     b    b        a1    a1    a1    a2    a2    a2    b1  b1 b2 empty   b2
+               newdim_col = newdim_col + 1
+               n_doubled_items_in_partially_filled_block = 0
+            END IF
+
+            newdim_col = (newdim_col*nprocs_col + nfilled_blocks_remain)*ncol_block + n_doubled_items_in_partially_filled_block
+         END IF
+      END IF
+
+      IF (row) THEN
+         IF (nrow_global == 0) THEN
+            newdim_row = 0
+         ELSE
+            n_doubled_items_in_partially_filled_block = 2*MOD(nrow_global, nrow_block)
+            nfilled_blocks = nrow_global/nrow_block
+            nfilled_blocks_remain = MOD(nfilled_blocks, nprocs_row)
+            newdim_row = 2*(nfilled_blocks/nprocs_row)
+            IF (n_doubled_items_in_partially_filled_block > nrow_block) THEN
+               newdim_row = newdim_row + 1
+               n_doubled_items_in_partially_filled_block = n_doubled_items_in_partially_filled_block - nrow_block
+            ELSE IF (nfilled_blocks_remain > 0) THEN
+               newdim_row = newdim_row + 1
+               n_doubled_items_in_partially_filled_block = 0
+            END IF
+
+            newdim_row = (newdim_row*nprocs_row + nfilled_blocks_remain)*nrow_block + n_doubled_items_in_partially_filled_block
+         END IF
+      END IF
+
+      ! square_blocks=.FALSE. ensures that matrix blocks of the doubled matrix will have
+      ! nrow_block x ncol_block shape even in case of a square doubled matrix
+      CALL cp_fm_struct_create(fmstruct=fmstruct, para_env=para_env, &
+                               context=context, &
+                               nrow_global=newdim_row, &
+                               ncol_global=newdim_col, &
+                               ncol_block=ncol_block, &
+                               nrow_block=nrow_block, &
+                               square_blocks=.FALSE.)
+
+   END SUBROUTINE cp_fm_struct_double
+! **************************************************************************************************
+!> \brief allows to modify the default settings for matrix creation
+!> \param nrow_block ...
+!> \param ncol_block ...
+!> \param force_block ...
+! **************************************************************************************************
+   SUBROUTINE cp_fm_struct_config(nrow_block, ncol_block, force_block)
+      INTEGER, INTENT(IN), OPTIONAL                      :: nrow_block, ncol_block
+      LOGICAL, INTENT(IN), OPTIONAL                      :: force_block
+
+      INTEGER                                            :: vlen
+
+      vlen = m_cpuid_vlen()
+      IF (PRESENT(ncol_block)) THEN
+         IF (0 < ncol_block) THEN
+            optimal_blacs_col_block_size = (ncol_block + vlen - 1)/vlen*vlen
+         END IF
+      END IF
+      IF (PRESENT(nrow_block)) THEN
+         IF (0 < nrow_block) THEN
+            optimal_blacs_row_block_size = (nrow_block + vlen - 1)/vlen*vlen
+         END IF
+      END IF
+      IF (PRESENT(force_block)) force_block_size = force_block
+
+   END SUBROUTINE cp_fm_struct_config
+
+! **************************************************************************************************
+!> \brief ...
+!> \return ...
+! **************************************************************************************************
+   FUNCTION cp_fm_struct_get_nrow_block() RESULT(res)
+      INTEGER                                            :: res
+
+      res = optimal_blacs_row_block_size
+   END FUNCTION cp_fm_struct_get_nrow_block
+
+! **************************************************************************************************
+!> \brief ...
+!> \return ...
+! **************************************************************************************************
+   FUNCTION cp_fm_struct_get_ncol_block() RESULT(res)
+      INTEGER                                            :: res
+
+      res = optimal_blacs_col_block_size
+   END FUNCTION cp_fm_struct_get_ncol_block
+
+! **************************************************************************************************
+!> \brief wrapper to scalapack function INDXG2P that computes the row process
+!>         coordinate which possesses the entry of a distributed matrix specified
+!>         by a global index INDXGLOB.
+!> \param struct ...
+!> \param INDXGLOB ...
+!> \return ...
+!> \author Mauro Del Ben [MDB] - 12.2012, modified by F. Stein
+! **************************************************************************************************
+   FUNCTION cp_fm_indxg2p_row(struct, INDXGLOB) RESULT(G2P)
+      CLASS(cp_fm_struct_type), INTENT(IN) :: struct
+      INTEGER, INTENT(IN) :: INDXGLOB
+      INTEGER                                  :: G2P
+
+#if defined(__parallel)
+      INTEGER :: number_of_process_rows
+      INTEGER, EXTERNAL :: indxg2p
+#endif
+
+#if defined(__parallel)
+
+      CALL struct%context%get(number_of_process_rows=number_of_process_rows)
+
+      G2P = indxg2p(INDXGLOB, struct%nrow_block, 0, struct%first_p_pos(1), number_of_process_rows)
+
+#else
+      MARK_USED(struct)
+      MARK_USED(indxglob)
+
+      G2P = 0
+
+#endif
+
+   END FUNCTION cp_fm_indxg2p_row
+
+! **************************************************************************************************
+!> \brief wrapper to scalapack function INDXG2P that computes the col process
+!>         coordinate which possesses the entry of a distributed matrix specified
+!>         by a global index INDXGLOB.
+!> \param struct ...
+!> \param INDXGLOB ...
+!> \return ...
+!> \author Mauro Del Ben [MDB] - 12.2012, modified by F. Stein
+! **************************************************************************************************
+   FUNCTION cp_fm_indxg2p_col(struct, INDXGLOB) RESULT(G2P)
+      CLASS(cp_fm_struct_type), INTENT(IN) :: struct
+      INTEGER, INTENT(IN) :: INDXGLOB
+      INTEGER                                  :: G2P
+
+#if defined(__parallel)
+      INTEGER :: number_of_process_columns
+      INTEGER, EXTERNAL :: indxg2p
+#endif
+
+#if defined(__parallel)
+
+      CALL struct%context%get(number_of_process_columns=number_of_process_columns)
+
+      G2P = indxg2p(INDXGLOB, struct%ncol_block, 0, struct%first_p_pos(2), number_of_process_columns)
+
+#else
+      MARK_USED(struct)
+      MARK_USED(indxglob)
+
+      G2P = 0
+
+#endif
+
+   END FUNCTION cp_fm_indxg2p_col
+
+! **************************************************************************************************
+!> \brief wrapper to scalapack function INDXG2L that computes the local index
+!>         of a distributed matrix entry pointed to by the global index INDXGLOB.
+!>
+!>  Arguments
+!>  =========
+!>
+!>  INDXGLOB  (global input) INTEGER
+!>            The global index of the distributed matrix entry.
+!>
+!>  NB        (global input) INTEGER
+!>            Block size, size of the blocks the distributed matrix is
+!>            split into.
+!>
+!>  IPROC     (local dummy) INTEGER
+!>            Dummy argument in this case in order to unify the calling
+!>            sequence of the tool-routines.
+!>
+!>  ISRCPROC  (local dummy) INTEGER
+!>            Dummy argument in this case in order to unify the calling
+!>            sequence of the tool-routines.
+!>
+!>  NPROCS    (global input) INTEGER
+!>            The total number processes over which the distributed
+!>            matrix is distributed.
+!>
+!> \param struct ...
+!> \param INDXGLOB ...
+!> \return ...
+!> \author Mauro Del Ben [MDB] - 12.2012
+! **************************************************************************************************
+   FUNCTION cp_fm_indxg2l_row(struct, INDXGLOB) RESULT(G2L)
+      CLASS(cp_fm_struct_type), INTENT(IN) :: struct
+      INTEGER, INTENT(IN)                      :: INDXGLOB
+      INTEGER                                  :: G2L
+
+#if defined(__parallel)
+      INTEGER :: number_of_process_rows
+      INTEGER, EXTERNAL :: indxg2l
+#endif
+
+#if defined(__parallel)
+
+      CALL struct%context%get(number_of_process_rows=number_of_process_rows)
+
+      G2L = indxg2l(INDXGLOB, struct%nrow_block, 0, struct%first_p_pos(1), number_of_process_rows)
+
+#else
+      MARK_USED(struct)
+
+      G2L = INDXGLOB
+
+#endif
+
+   END FUNCTION cp_fm_indxg2l_row
+
+! **************************************************************************************************
+!> \brief wrapper to scalapack function INDXG2L that computes the local index
+!>         of a distributed matrix entry pointed to by the global index INDXGLOB.
+!>
+!>  Arguments
+!>  =========
+!>
+!>  INDXGLOB  (global input) INTEGER
+!>            The global index of the distributed matrix entry.
+!>
+!>  NB        (global input) INTEGER
+!>            Block size, size of the blocks the distributed matrix is
+!>            split into.
+!>
+!>  IPROC     (local dummy) INTEGER
+!>            Dummy argument in this case in order to unify the calling
+!>            sequence of the tool-routines.
+!>
+!>  ISRCPROC  (local dummy) INTEGER
+!>            Dummy argument in this case in order to unify the calling
+!>            sequence of the tool-routines.
+!>
+!>  NPROCS    (global input) INTEGER
+!>            The total number processes over which the distributed
+!>            matrix is distributed.
+!>
+!> \param struct ...
+!> \param INDXGLOB ...
+!> \return ...
+!> \author Mauro Del Ben [MDB] - 12.2012
+! **************************************************************************************************
+   FUNCTION cp_fm_indxg2l_col(struct, INDXGLOB) RESULT(G2L)
+      CLASS(cp_fm_struct_type), INTENT(IN) :: struct
+      INTEGER, INTENT(IN)                      :: INDXGLOB
+      INTEGER                                  :: G2L
+
+#if defined(__parallel)
+      INTEGER :: number_of_process_columns
+      INTEGER, EXTERNAL :: indxg2l
+#endif
+
+#if defined(__parallel)
+
+      CALL struct%context%get(number_of_process_columns=number_of_process_columns)
+
+      G2L = indxg2l(INDXGLOB, struct%ncol_block, 0, struct%first_p_pos(2), number_of_process_columns)
+
+#else
+      MARK_USED(struct)
+
+      G2L = INDXGLOB
+
+#endif
+
+   END FUNCTION cp_fm_indxg2l_col
+
+! **************************************************************************************************
+!> \brief wrapper to scalapack function INDXL2G that computes the global index
+!>         of a distributed matrix entry pointed to by the local index INDXLOC
+!>         of the process indicated by IPROC.
+!>
+!>  Arguments
+!>  =========
+!>
+!>  INDXLOC   (global input) INTEGER
+!>            The local index of the distributed matrix entry.
+!>
+!>  NB        (global input) INTEGER
+!>            Block size, size of the blocks the distributed matrix is
+!>            split into.
+!>
+!>  IPROC     (local input) INTEGER
+!>            The coordinate of the process whose local array row or
+!>            column is to be determined.
+!>
+!>  ISRCPROC  (global input) INTEGER
+!>            The coordinate of the process that possesses the first
+!>            row/column of the distributed matrix.
+!>
+!>  NPROCS    (global input) INTEGER
+!>            The total number processes over which the distributed
+!>            matrix is distributed.
+!>
+!> \param struct ...
+!> \param INDXLOC ...
+!> \param IPROC ...
+!> \return ...
+!> \author Mauro Del Ben [MDB] - 12.2012
+! **************************************************************************************************
+   FUNCTION cp_fm_indxl2g_row(struct, INDXLOC, IPROC) RESULT(L2G)
+      CLASS(cp_fm_struct_type), INTENT(IN) :: struct
+      INTEGER, INTENT(IN)                      :: INDXLOC, IPROC
+      INTEGER                                  :: L2G
+
+#if defined(__parallel)
+      INTEGER :: number_of_process_rows
+      INTEGER, EXTERNAL :: indxl2g
+
+      CALL struct%context%get(number_of_process_rows=number_of_process_rows)
+
+      L2G = indxl2g(INDXLOC, struct%nrow_block, IPROC, struct%first_p_pos(1), number_of_process_rows)
+
+#else
+      MARK_USED(struct)
+      MARK_USED(indxloc)
+      MARK_USED(iproc)
+
+      L2G = INDXLOC
+
+#endif
+
+   END FUNCTION cp_fm_indxl2g_row
+
+! **************************************************************************************************
+!> \brief wrapper to scalapack function INDXL2G that computes the global index
+!>         of a distributed matrix entry pointed to by the local index INDXLOC
+!>         of the process indicated by IPROC.
+!>
+!>  Arguments
+!>  =========
+!>
+!>  INDXLOC   (global input) INTEGER
+!>            The local index of the distributed matrix entry.
+!>
+!>  NB        (global input) INTEGER
+!>            Block size, size of the blocks the distributed matrix is
+!>            split into.
+!>
+!>  IPROC     (local input) INTEGER
+!>            The coordinate of the process whose local array row or
+!>            column is to be determined.
+!>
+!>  ISRCPROC  (global input) INTEGER
+!>            The coordinate of the process that possesses the first
+!>            row/column of the distributed matrix.
+!>
+!>  NPROCS    (global input) INTEGER
+!>            The total number processes over which the distributed
+!>            matrix is distributed.
+!>
+!> \param struct ...
+!> \param INDXLOC ...
+!> \param IPROC ...
+!> \return ...
+!> \author Mauro Del Ben [MDB] - 12.2012
+! **************************************************************************************************
+   FUNCTION cp_fm_indxl2g_col(struct, INDXLOC, IPROC) RESULT(L2G)
+      CLASS(cp_fm_struct_type), INTENT(IN) :: struct
+      INTEGER, INTENT(IN)                      :: INDXLOC, IPROC
+      INTEGER                                  :: L2G
+
+#if defined(__parallel)
+      INTEGER :: number_of_process_columns
+      INTEGER, EXTERNAL :: indxl2g
+
+      CALL struct%context%get(number_of_process_columns=number_of_process_columns)
+
+      L2G = indxl2g(INDXLOC, struct%ncol_block, IPROC, struct%first_p_pos(2), number_of_process_columns)
+
+#else
+      MARK_USED(struct)
+      MARK_USED(indxloc)
+      MARK_USED(iproc)
+
+      L2G = INDXLOC
+
+#endif
+
+   END FUNCTION cp_fm_indxl2g_col
+
+END MODULE cp_fm_struct

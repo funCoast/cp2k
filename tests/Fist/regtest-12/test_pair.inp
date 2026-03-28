@@ -1,0 +1,112 @@
+&GLOBAL
+  PRINT_LEVEL MEDIUM
+  PROJECT test_pair
+  RUN_TYPE ENERGY_FORCE
+&END GLOBAL
+
+&FORCE_EVAL
+  METHOD FIST
+  &MM
+    &FORCEFIELD
+      &BEND
+        ATOMS H O O
+        K 0.0
+        KIND HARMONIC
+        THETA0 0.0
+      &END BEND
+      &BOND
+        ATOMS O H
+        K 0.0
+        KIND HARMONIC
+        R0 1.0
+      &END BOND
+      &BOND
+        ATOMS O O
+        K 0.0
+        KIND HARMONIC
+        R0 1.0
+      &END BOND
+      &CHARGE
+        ATOM O
+        CHARGE 0.0
+      &END CHARGE
+      &CHARGE
+        ATOM H
+        CHARGE 0.0
+      &END CHARGE
+      &NONBONDED
+        &GENPOT
+          ATOMS H H
+          FUNCTION 0.0/r
+          VARIABLES r
+        &END GENPOT
+        &GENPOT
+          ATOMS O H
+          FUNCTION 0.0*r
+          VARIABLES r
+        &END GENPOT
+        &GENPOT
+          ATOMS O O
+          FUNCTION 0.0*r
+          VARIABLES r
+        &END GENPOT
+      &END NONBONDED
+      &NONBONDED14
+        &GENPOT
+          ATOMS H H
+          FUNCTION -1/r
+          VARIABLES r
+        &END GENPOT
+        &GENPOT
+          ATOMS O H
+          FUNCTION 0.0*r
+          VARIABLES r
+        &END GENPOT
+        &GENPOT
+          ATOMS O O
+          FUNCTION 0.0*r
+          VARIABLES r
+        &END GENPOT
+      &END NONBONDED14
+      &SPLINE
+        EMAX_ACCURACY 0.5
+        EMAX_SPLINE 0.5
+        RCUT_NB 10.0
+      &END SPLINE
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        EWALD_TYPE NONE
+      &END EWALD
+    &END POISSON
+    &PRINT
+      &FF_INFO
+      &END FF_INFO
+    &END PRINT
+  &END MM
+  &PRINT
+    &FORCES
+      &EACH
+        MD 1
+      &END EACH
+    &END FORCES
+  &END PRINT
+  &SUBSYS
+    &CELL
+      ABC 24.955 24.955 24.955
+      PERIODIC NONE
+    &END CELL
+    &PRINT
+      &TOPOLOGY_INFO
+        XYZ_INFO T
+      &END TOPOLOGY_INFO
+    &END PRINT
+    &TOPOLOGY
+      COORDINATE XYZ
+      COORD_FILE_NAME ../sample_xyz/H2O2.xyz
+      &GENERATE
+        CREATE_MOLECULES T
+      &END GENERATE
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

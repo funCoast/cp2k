@@ -1,0 +1,72 @@
+&GLOBAL
+  PROJECT multipole_charge_quadrupole
+  RUN_TYPE ENERGY_FORCE
+&END GLOBAL
+
+&FORCE_EVAL
+  METHOD Fist
+  &MM
+    &FORCEFIELD
+      &CHARGE
+        ATOM O
+        CHARGE -1.0
+      &END CHARGE
+      &CHARGE
+        ATOM H
+        CHARGE 0.0
+      &END CHARGE
+      &NONBONDED
+        &LENNARD-JONES
+          ATOMS O O
+          EPSILON 0.0
+          RCUT 15.0
+          SIGMA 3.166
+        &END LENNARD-JONES
+        &LENNARD-JONES
+          ATOMS O H
+          EPSILON 0.0
+          RCUT 15.0
+          SIGMA 3.6705
+        &END LENNARD-JONES
+        &LENNARD-JONES
+          ATOMS H H
+          EPSILON 0.0
+          RCUT 15.0
+          SIGMA 3.30523
+        &END LENNARD-JONES
+      &END NONBONDED
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        ALPHA .5
+        EWALD_TYPE ewald
+        GMAX 21
+        &MULTIPOLES
+          MAX_MULTIPOLE_EXPANSION QUADRUPOLE
+        &END MULTIPOLES
+      &END EWALD
+    &END POISSON
+  &END MM
+  &PRINT
+    &FORCES
+    &END FORCES
+  &END PRINT
+  &SUBSYS
+    &CELL
+      ABC 10.0 10.0 10.0
+    &END CELL
+    &COORD
+      O   0.00 0.00 0.00
+      H   2.00 2.00 2.00
+    &END COORD
+    &MULTIPOLES
+      &QUADRUPOLES
+        0.000000000    0.000000000    0.000000000    0.000000000    0.000000000    0.000000000
+        0.000669386    0.000531955   -0.000824274    0.000422001   -0.000615590   -0.001091387
+      &END QUADRUPOLES
+    &END MULTIPOLES
+    &TOPOLOGY
+      CONNECTIVITY OFF
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

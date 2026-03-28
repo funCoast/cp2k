@@ -1,0 +1,88 @@
+&GLOBAL
+  PRINT_LEVEL MEDIUM
+  PROJECT H2
+  RUN_TYPE MD
+&END GLOBAL
+
+&MOTION
+  &CONSTRAINT
+    &COLLECTIVE
+      COLVAR 1
+      INTERMOLECULAR FALSE
+      MOLNAME H2
+      TARGET [BOHR] 1.40
+    &END COLLECTIVE
+    &VIRTUAL_SITE
+      ATOMS 3 2 1 2
+      INTERMOLECULAR FALSE
+      MOLNAME H2
+      PARAMETERS 0.250000000 0.250000000
+    &END VIRTUAL_SITE
+  &END CONSTRAINT
+  &MD
+    ENSEMBLE NVE
+    STEPS 10
+    TEMPERATURE 100
+    TIMESTEP 1.0
+  &END MD
+  &PRINT
+    &FORCES ON
+      FORMAT XYZ
+      &EACH
+        MD 2
+      &END EACH
+    &END FORCES
+    &VELOCITIES ON
+      FORMAT XYZ
+      &EACH
+        MD 2
+      &END EACH
+    &END VELOCITIES
+  &END PRINT
+&END MOTION
+
+&FORCE_EVAL
+  &DFT
+    &QS
+      METHOD xTB
+      &XTB
+        DO_EWALD F
+        DO_NONBONDED T
+        &NONBONDED
+          &GENPOT
+            ATOMS X X
+            FUNCTION 4*E*( (S/r)**8 - (S/r)**6 )
+            PARAMETERS E S
+            VALUES 8.2337E-5 4.830
+            VARIABLES r
+          &END GENPOT
+        &END NONBONDED
+      &END XTB
+    &END QS
+    &SCF
+      EPS_SCF 1.e-10
+      MAX_SCF 100
+      SCF_GUESS MOPAC
+    &END SCF
+  &END DFT
+  &SUBSYS
+    &CELL
+      ABC 40.0 40.0 40.0
+      PERIODIC NONE
+    &END CELL
+    &COLVAR
+      &DISTANCE
+        ATOMS 1 2
+      &END DISTANCE
+    &END COLVAR
+    &COORD
+      UNIT bohr
+      H     0.000000    0.000000   20.000000 H2
+      H     1.360000    0.000000   20.000000 H2
+      X     0.680000    0.000000   20.000000 H2
+      H    -2.000000    0.000000   20.000000 H2
+      H    -2.000000    1.360000   20.000000 H2
+      X    -2.000000    0.680000   20.000000 H2
+    &END COORD
+  &END SUBSYS
+&END FORCE_EVAL

@@ -1,0 +1,45 @@
+&GLOBAL
+  PROJECT G_T
+  RUN_TYPE ENERGY
+&END GLOBAL
+
+&FORCE_EVAL
+  METHOD Quickstep
+  &DFT
+    &QS
+      METHOD PM6
+      &SE
+      &END SE
+    &END QS
+    &SCF
+      MAX_SCF 0
+    &END SCF
+  &END DFT
+  &SUBSYS
+    &CELL
+      ABC 20.0 20.0 20.0
+      PERIODIC NONE
+    &END CELL
+    &COORD
+      C   0.10      0.20      1.00
+      C  -0.10     -0.20      1.00
+      C   1.00      0.10      0.20
+      C   1.00     -0.10     -0.20
+      C  -1.00     -0.10      0.20
+      C  -1.00      0.10     -0.20
+      C   0.20      1.00      0.10
+      C  -0.20      1.00     -0.10
+      C  -0.20     -1.00      0.10
+      C   0.20     -1.00     -0.10
+      C   0.10     -0.20     -1.00
+      C  -0.10      0.20     -1.00
+    &END COORD
+    &PRINT
+      &SYMMETRY
+        ALL
+        CHECK_SYMMETRY T
+        MOLECULE
+      &END SYMMETRY
+    &END PRINT
+  &END SUBSYS
+&END FORCE_EVAL

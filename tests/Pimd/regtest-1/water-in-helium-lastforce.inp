@@ -1,0 +1,72 @@
+&GLOBAL
+  PRINT_LEVEL low
+  PROJECT_NAME water-in-helium-lastforce
+  RUN_TYPE PINT
+&END GLOBAL
+
+&MOTION
+  &PINT
+    DT 0.5
+    NRESPA 2
+    NUM_STEPS 5
+    P 4
+    PROC_PER_REPLICA 1
+    TEMP 7.5
+    TRANSFORMATION NORMAL
+    T_TOL 0.0
+    &HELIUM
+      CELL_SHAPE OCTAHEDRON
+      GET_FORCES LAST
+      INOROT 200
+      IROT 100
+      NATOMS 32
+      NBEADS 16
+      NUM_ENV 2
+      PERIODIC T
+      POTENTIAL_FILE_NAME lj-test-pot.dat
+      SAMPLING_METHOD CEPERLEY
+      SOLUTE_INTERACTION MWATER
+      SOLUTE_RADIUS 2.0
+      &CEPERLEY
+        BISECTION 8
+        MAX_PERM_CYCLE 4
+      &END CEPERLEY
+    &END HELIUM
+    &NOSE
+      NNOS 3
+    &END NOSE
+  &END PINT
+&END MOTION
+
+&FORCE_EVAL
+  METHOD FIST
+  &MM
+    &FORCEFIELD
+      PARMTYPE CHM
+      PARM_FILE_NAME ../../Fist/sample_pot/water.pot
+      &CHARGE
+        ATOM OT
+        CHARGE -0.8476
+      &END CHARGE
+      &CHARGE
+        ATOM HT
+        CHARGE 0.4238
+      &END CHARGE
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        GMAX 25
+      &END EWALD
+    &END POISSON
+  &END MM
+  &SUBSYS
+    &CELL
+      ABC 8.0 8.0 8.0
+      PERIODIC NONE
+    &END CELL
+    &TOPOLOGY
+      COORD_FILE_FORMAT PDB
+      COORD_FILE_NAME ../../Fist/sample_pdb/water_1.pdb
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

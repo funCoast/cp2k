@@ -1,0 +1,58 @@
+&GLOBAL
+  PRINT_LEVEL LOW
+  PROJECT ace_ala_nme-ambconn
+  RUN_TYPE GEO_OPT
+&END GLOBAL
+
+&MOTION
+  &GEO_OPT
+    MAX_ITER 50
+  &END GEO_OPT
+  &PRINT
+    &RESTART OFF
+    &END RESTART
+    &TRAJECTORY
+    &END TRAJECTORY
+  &END PRINT
+&END MOTION
+
+&FORCE_EVAL
+  METHOD FIST
+  &MM
+    &FORCEFIELD
+      PARMTYPE CHM
+      PARM_FILE_NAME ../sample_pot/ace_ala_nme.2.pot
+      &SPLINE
+        EMAX_SPLINE 1.0
+      &END SPLINE
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        ALPHA .36
+        EWALD_TYPE ewald
+        GMAX 29
+      &END EWALD
+    &END POISSON
+  &END MM
+  &SUBSYS
+    &CELL
+      ABC 50.0 50.0 50.0
+    &END CELL
+    &PRINT
+      &TOPOLOGY_INFO
+        AMBER_INFO
+      &END TOPOLOGY_INFO
+    &END PRINT
+    &TOPOLOGY
+      CHARGE_BETA
+      CONNECTIVITY AMBER
+      CONN_FILE_NAME ../sample_top/ace_ala_nme.top
+      COORDINATE CRD
+      COORD_FILE_NAME ../sample_crd/ace_ala_nme.crd
+      &DUMP_PDB
+      &END DUMP_PDB
+      &DUMP_PSF
+      &END DUMP_PSF
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

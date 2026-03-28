@@ -1,0 +1,45 @@
+[check]
+line-length = 132
+force-exclude = true
+
+# Also see https://fortitude.readthedocs.io/en/stable/rules
+ignore = [
+    "non-standard-file-extension",
+    "implicit-external-procedures", # requires Fortran 2018
+    "missing-intent",
+    "assumed-size",
+    "assumed-size-character-intent",
+    "external-procedure",
+    "literal-kind",
+    "interface-implicit-typing",
+    "implicit-typing",
+    "missing-accessibility-statement",
+]
+
+# ==============================================================================
+# The following files can not be parsed by Fortitude.
+# Usually because Fortran statements are inter-leafed with pre-processor macros.
+exclude = [
+    "pw_methods.F",
+    "local_gemm_api.F",
+    "cp_fm_diag.F",
+    "cp_fm_cholesky.F",
+    "cp_fm_basic_linalg.F",
+    "cp_cfm_diag.F",
+    "cp_cfm_cholesky.F",
+    "cp_cfm_basic_linalg.F",
+    "dbt_split.F",
+    "dbt_tas_util.F",
+    "dbt_array_list_methods.F",
+    "xc_libxc_wrap.F",
+    "ai_contraction_sphi.F",
+    "smeagol_control_types.F",
+]
+
+# ==============================================================================
+[check.per-file-ignores]
+"semi_empirical_int_debug.F" = ["procedure-not-in-module"]
+"gopt_f77_methods.F" = ["procedure-not-in-module"]
+"pilaenv_hack.F" = ["procedure-not-in-module"]
+
+#EOF

@@ -1,0 +1,67 @@
+&GLOBAL
+  PRINT_LEVEL MEDIUM
+  PROJECT NiO
+&END GLOBAL
+
+&FORCE_EVAL
+  METHOD SIRIUS
+  &DFT
+    &XC
+      &XC_FUNCTIONAL
+        &LDA_C_PZ
+        &END LDA_C_PZ
+        &LDA_X
+        &END LDA_X
+      &END XC_FUNCTIONAL
+    &END XC
+  &END DFT
+  &PW_DFT
+    &CONTROL
+      GEN_EVP_SOLVER_NAME lapack
+      PROCESSING_UNIT cpu
+      STD_EVP_SOLVER_NAME lapack
+      VERBOSITY 2
+    &END CONTROL
+    &ITERATIVE_SOLVER
+      CONVERGE_BY_ENERGY 1
+      ENERGY_TOLERANCE 1e-2
+      NUM_STEPS 20
+      RESIDUAL_TOLERANCE 1e-6
+      SUBSPACE_SIZE 4
+      TYPE davidson
+    &END ITERATIVE_SOLVER
+    &MIXER
+      BETA 0.75
+      MAX_HISTORY 8
+      TYPE broyden2
+    &END MIXER
+    &PARAMETERS
+      ELECTRONIC_STRUCTURE_METHOD pseudopotential
+      GK_CUTOFF 6.0
+      NGRIDK 2 2 2
+      NUM_DFT_ITER 100
+      NUM_MAG_DIMS 0
+      PW_CUTOFF 20.00
+      SMEARING_WIDTH 0.025
+      USE_SYMMETRY true
+    &END PARAMETERS
+  &END PW_DFT
+  &SUBSYS
+    &CELL
+      A [bohr] 0.0 3.80402 3.80402
+      B [bohr] 3.80402 0.0 3.80402
+      C [bohr] 3.80402 3.80402 0.0
+    &END CELL
+    &COORD
+      SCALED
+      Li 0.0 0.0 0.0
+      F 0.5 0.5 0.5
+    &END COORD
+    &KIND Li
+      POTENTIAL UPF "Li.pz-s-kjpaw_psl.0.2.1.UPF.json"
+    &END KIND
+    &KIND F
+      POTENTIAL UPF "F.pz-n-kjpaw_psl.0.1.UPF.json"
+    &END KIND
+  &END SUBSYS
+&END FORCE_EVAL

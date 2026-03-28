@@ -1,0 +1,95 @@
+&GLOBAL
+  PROJECT multipole_charge3
+  RUN_TYPE ENERGY_FORCE
+&END GLOBAL
+
+# Reference:
+# *******************************************************************************
+# INITIAL GSPACE ENERGY[hartree]   =                        0.380599574901700E-01
+# INITIAL NONBONDED ENERGY[hartree]=                       -0.816035117064580E+01
+# SELF ENERGY CORRECTION[hartree]  =                       -0.716535045366688E+01
+# NEUT. BACKGROUND[hartree]        =                       -0.000000000000000E+00
+# BONDED CORRECTION[hartree]       =                        0.000000000000000E+00
+# *******************************************************************************
+#
+# Calculation:
+# *******************************************************************************
+# INITIAL GSPACE ENERGY[hartree]   =                        0.380599574901700E-01
+# INITIAL RSPACE ENERGY[hartree]   =                       -0.816035194589464E+01
+# INITIAL NONBONDED ENERGY[hartree]=                       -0.816035194589464E+01
+# SELF ENERGY CORRECTION[hartree]  =                       -0.716535045366688E+01
+# *******************************************************************************
+#
+# Comment: the small difference for the NONBONDED ENERGY is due to the spline
+#          accuracy for the reference calculation
+&FORCE_EVAL
+  METHOD Fist
+  &MM
+    &FORCEFIELD
+      &BEND
+        ATOMS H O H
+        K 0.0
+        THETA0 1.8
+      &END BEND
+      &BOND
+        ATOMS O H
+        K 0.0
+        R0 1.8
+      &END BOND
+      &CHARGE
+        ATOM O
+        CHARGE -6.0
+      &END CHARGE
+      &CHARGE
+        ATOM H
+        CHARGE 2.0
+      &END CHARGE
+      &NONBONDED
+        &LENNARD-JONES
+          ATOMS O O
+          EPSILON 0.0
+          RCUT 11.4
+          SIGMA 3.166
+        &END LENNARD-JONES
+        &LENNARD-JONES
+          ATOMS O H
+          EPSILON 0.0
+          RCUT 11.4
+          SIGMA 3.6705
+        &END LENNARD-JONES
+        &LENNARD-JONES
+          ATOMS H H
+          EPSILON 0.0
+          RCUT 11.4
+          SIGMA 3.30523
+        &END LENNARD-JONES
+      &END NONBONDED
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        ALPHA .5
+        EWALD_TYPE ewald
+        GMAX 21
+        &MULTIPOLES
+          MAX_MULTIPOLE_EXPANSION QUADRUPOLE
+        &END MULTIPOLES
+      &END EWALD
+    &END POISSON
+  &END MM
+  &PRINT
+    &FORCES
+    &END FORCES
+  &END PRINT
+  &SUBSYS
+    &CELL
+      ABC 9.865 9.865 9.865
+    &END CELL
+    &COORD
+      O   0.000000    0.000000    0.0
+      O   0.000000    0.000000    1.4
+    &END COORD
+    &TOPOLOGY
+      CONNECTIVITY OFF
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

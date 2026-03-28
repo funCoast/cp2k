@@ -1,0 +1,86 @@
+&GLOBAL
+  PROJECT water_massive
+  RUN_TYPE MD
+&END GLOBAL
+
+&MOTION
+  &MD
+    ENSEMBLE NVT
+    STEPS 3
+    TEMPERATURE 298
+    TIMESTEP 0.5
+    &THERMOSTAT
+      REGION MASSIVE
+      &NOSE
+        LENGTH 3
+        MTS 2
+        TIMECON 1000
+        YOSHIDA 3
+      &END NOSE
+    &END THERMOSTAT
+  &END MD
+&END MOTION
+
+&FORCE_EVAL
+  METHOD FIST
+  &MM
+    &FORCEFIELD
+      &BOND
+        ATOMS O H
+        K 0.4015204 0.0 0.0
+        KIND QUARTIC
+        R0 1.812
+      &END BOND
+      &BOND
+        ATOMS H H
+        K 0.02384043 -0.0506033 0.0287044
+        KIND QUARTIC
+        R0 3.0699
+      &END BOND
+      &CHARGE
+        ATOM O
+        CHARGE -0.7699784
+      &END CHARGE
+      &CHARGE
+        ATOM H
+        CHARGE 0.3849892
+      &END CHARGE
+      &NONBONDED
+        &IPBV
+          ATOMS O O
+          RCUT 7.8
+        &END IPBV
+        &IPBV
+          ATOMS H O
+          RCUT 7.8
+        &END IPBV
+        &IPBV
+          ATOMS H H
+          RCUT 7.8
+        &END IPBV
+      &END NONBONDED
+      &SPLINE
+        EPS_SPLINE 1.E-5
+      &END SPLINE
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        ALPHA .44
+        EWALD_TYPE spme
+        GMAX 25
+        O_SPLINE 4
+      &END EWALD
+    &END POISSON
+  &END MM
+  &SUBSYS
+    &CELL
+      ABC 24.955 24.955 24.955
+    &END CELL
+    &TOPOLOGY
+      CONNECTIVITY UPSF
+      CONN_FILE_NAME ../sample_psf/ipbv_flex.psf
+      COORDINATE pdb
+      COORD_FILE_NAME ../sample_pdb/ipbv.pdb
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

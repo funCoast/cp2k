@@ -1,0 +1,906 @@
+!--------------------------------------------------------------------------------------------------!
+!   CP2K: A general program to perform molecular dynamics simulations                              !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
+!                                                                                                  !
+!   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
+!--------------------------------------------------------------------------------------------------!
+
+MODULE qs_tddfpt2_operators
+   USE admm_types,                      ONLY: admm_type
+   USE cell_types,                      ONLY: cell_type,&
+                                              pbc
+   USE cp_control_types,                ONLY: tddfpt2_control_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_create, dbcsr_filter, dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, &
+        dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_p_type, &
+        dbcsr_release, dbcsr_set, dbcsr_type, dbcsr_type_no_symmetry
+   USE cp_dbcsr_operations,             ONLY: copy_fm_to_dbcsr,&
+                                              cp_dbcsr_plus_fm_fm_t,&
+                                              cp_dbcsr_sm_fm_multiply
+   USE cp_fm_basic_linalg,              ONLY: cp_fm_column_scale,&
+                                              cp_fm_scale_and_add
+   USE cp_fm_struct,                    ONLY: cp_fm_struct_type
+   USE cp_fm_types,                     ONLY: cp_fm_create,&
+                                              cp_fm_get_info,&
+                                              cp_fm_release,&
+                                              cp_fm_to_fm,&
+                                              cp_fm_type
+   USE hartree_local_methods,           ONLY: Vh_1c_gg_integrals
+   USE hartree_local_types,             ONLY: hartree_local_type
+   USE hfx_admm_utils,                  ONLY: tddft_hfx_matrix
+   USE hfx_types,                       ONLY: hfx_type
+   USE input_constants,                 ONLY: no_sf_tddfpt,&
+                                              tddfpt_sf_noncol
+   USE input_section_types,             ONLY: section_vals_get,&
+                                              section_vals_get_subs_vals,&
+                                              section_vals_type
+   USE kinds,                           ONLY: dp
+   USE message_passing,                 ONLY: mp_para_env_type
+   USE parallel_gemm_api,               ONLY: parallel_gemm
+   USE particle_types,                  ONLY: particle_type
+   USE pw_env_types,                    ONLY: pw_env_get,&
+                                              pw_env_type
+   USE pw_methods,                      ONLY: pw_axpy,&
+                                              pw_multiply,&
+                                              pw_scale,&
+                                              pw_transfer,&
+                                              pw_zero
+   USE pw_poisson_methods,              ONLY: pw_poisson_solve
+   USE pw_poisson_types,                ONLY: pw_poisson_type
+   USE pw_pool_types,                   ONLY: pw_pool_p_type,&
+                                              pw_pool_type
+   USE pw_types,                        ONLY: pw_c1d_gs_type,&
+                                              pw_r3d_rs_type
+   USE qs_environment_types,            ONLY: get_qs_env,&
+                                              qs_environment_type
+   USE qs_kernel_types,                 ONLY: full_kernel_env_type
+   USE qs_local_rho_types,              ONLY: local_rho_type
+   USE qs_rho0_ggrid,                   ONLY: integrate_vhg0_rspace
+   USE qs_rho_types,                    ONLY: qs_rho_get,&
+                                              qs_rho_type
+   USE qs_tddfpt2_stda_utils,           ONLY: get_lowdin_x
+   USE qs_tddfpt2_subgroups,            ONLY: tddfpt_subgroup_env_type
+   USE qs_tddfpt2_types,                ONLY: tddfpt_ground_state_mos,&
+                                              tddfpt_work_matrices
+   USE realspace_grid_types,            ONLY: realspace_grid_desc_p_type,&
+                                              realspace_grid_type
+   USE xc,                              ONLY: xc_calc_2nd_deriv_analytical,&
+                                              xc_calc_2nd_deriv_numerical
+   USE xc_rho_set_types,                ONLY: xc_rho_set_type,&
+                                              xc_rho_set_update
+#include "./base/base_uses.f90"
+
+   IMPLICIT NONE
+
+   PRIVATE
+
+   CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_tddfpt2_operators'
+
+   LOGICAL, PARAMETER, PRIVATE          :: debug_this_module = .FALSE.
+   ! number of first derivative components (3: d/dx, d/dy, d/dz)
+   INTEGER, PARAMETER, PRIVATE          :: nderivs = 3
+   INTEGER, PARAMETER, PRIVATE          :: maxspins = 2
+
+   PUBLIC :: tddfpt_apply_energy_diff, tddfpt_apply_coulomb, tddfpt_apply_xc, tddfpt_apply_hfx, &
+             tddfpt_apply_xc_potential, tddfpt_apply_hfxlr_kernel, tddfpt_apply_hfxsr_kernel
+
+! **************************************************************************************************
+
+CONTAINS
+
+! **************************************************************************************************
+!> \brief Apply orbital energy difference term:
+!>        Aop_evects(spin,state) += KS(spin) * evects(spin,state) -
+!>                                  S * evects(spin,state) * diag(evals_occ(spin))
+!> \param Aop_evects  action of TDDFPT operator on trial vectors (modified on exit)
+!> \param evects      trial vectors C_{1,i}
+!> \param S_evects    S * C_{1,i}
+!> \param gs_mos      molecular orbitals optimised for the ground state (only occupied orbital
+!>                    energies [component %evals_occ] are needed)
+!> \param matrix_ks   Kohn-Sham matrix
+!> \param tddfpt_control ...
+!> \par History
+!>    * 05.2016 initialise all matrix elements in one go [Sergey Chulkov]
+!>    * 03.2017 renamed from tddfpt_init_energy_diff(), altered prototype [Sergey Chulkov]
+!> \note Based on the subroutine p_op_l1() which was originally created by
+!>       Thomas Chassaing on 08.2002.
+! **************************************************************************************************
+   SUBROUTINE tddfpt_apply_energy_diff(Aop_evects, evects, S_evects, gs_mos, matrix_ks, tddfpt_control)
+      TYPE(cp_fm_type), DIMENSION(:, :), INTENT(INOUT)   :: Aop_evects
+      TYPE(cp_fm_type), DIMENSION(:, :), INTENT(IN)      :: evects, S_evects
+      TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
+         INTENT(in)                                      :: gs_mos
+      TYPE(dbcsr_p_type), DIMENSION(:), INTENT(in)       :: matrix_ks
+      TYPE(tddfpt2_control_type), INTENT(in), POINTER    :: tddfpt_control
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_apply_energy_diff'
+
+      INTEGER                                            :: handle, i, ispin, ivect, j, nactive, &
+                                                            nao, nspins, nvects, spin2
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: evals_active
+      TYPE(cp_fm_struct_type), POINTER                   :: matrix_struct
+      TYPE(cp_fm_type)                                   :: hevec
+
+      CALL timeset(routineN, handle)
+
+      nspins = SIZE(evects, 1)
+      nvects = SIZE(evects, 2)
+
+      DO ispin = 1, SIZE(evects, 1)
+         CALL cp_fm_get_info(matrix=evects(ispin, 1), matrix_struct=matrix_struct, &
+                             nrow_global=nao, ncol_global=nactive)
+         CALL cp_fm_create(hevec, matrix_struct)
+         ALLOCATE (evals_active(nactive))
+         DO i = 1, nactive
+            j = gs_mos(ispin)%index_active(i)
+            evals_active(i) = gs_mos(ispin)%evals_occ(j)
+         END DO
+
+         IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
+            spin2 = ispin
+         ELSE
+            spin2 = 2
+         END IF
+
+         DO ivect = 1, nvects
+            CALL cp_dbcsr_sm_fm_multiply(matrix_ks(spin2)%matrix, evects(ispin, ivect), &
+                                         Aop_evects(ispin, ivect), ncol=nactive, &
+                                         alpha=1.0_dp, beta=1.0_dp)
+
+            IF (ASSOCIATED(gs_mos(ispin)%evals_occ_matrix)) THEN
+               ! orbital energy correction: evals_occ_matrix is not a diagonal matrix
+               CALL parallel_gemm('N', 'N', nao, nactive, nactive, 1.0_dp, &
+                                  S_evects(ispin, ivect), gs_mos(ispin)%evals_occ_matrix, &
+                                  0.0_dp, hevec)
+            ELSE
+               CALL cp_fm_to_fm(S_evects(ispin, ivect), hevec)
+               CALL cp_fm_column_scale(hevec, evals_active)
+            END IF
+
+            ! KS * C1 - S * C1 * occupied_orbital_energies
+            CALL cp_fm_scale_and_add(1.0_dp, Aop_evects(ispin, ivect), -1.0_dp, hevec)
+         END DO
+         DEALLOCATE (evals_active)
+         CALL cp_fm_release(hevec)
+      END DO
+
+      CALL timestop(handle)
+
+   END SUBROUTINE tddfpt_apply_energy_diff
+
+! **************************************************************************************************
+!> \brief Update v_rspace by adding coulomb term.
+!> \param A_ia_rspace    action of TDDFPT operator on the trial vector expressed in a plane wave
+!>                       representation (modified on exit)
+!> \param rho_ia_g       response density in reciprocal space for the given trial vector
+!> \param local_rho_set ...
+!> \param hartree_local ...
+!> \param qs_env ...
+!> \param sub_env        the full sub_environment needed for calculation
+!> \param gapw           Flag indicating GAPW cacluation
+!> \param work_v_gspace  work reciprocal-space grid to store Coulomb potential (modified on exit)
+!> \param work_v_rspace  work real-space grid to store Coulomb potential (modified on exit)
+!> \param tddfpt_mgrid ...
+!> \par History
+!>    * 05.2016 compute all coulomb terms in one go [Sergey Chulkov]
+!>    * 03.2017 proceed excited states sequentially; minimise the number of conversions between
+!>              DBCSR and FM matrices [Sergey Chulkov]
+!>    * 06.2018 return the action expressed in the plane wave representation instead of the one
+!>              in the atomic basis set representation
+!> \note Based on the subroutine kpp1_calc_k_p_p1() which was originally created by
+!>       Mohamed Fawzi on 10.2002.
+! **************************************************************************************************
+   SUBROUTINE tddfpt_apply_coulomb(A_ia_rspace, rho_ia_g, local_rho_set, hartree_local, &
+                                   qs_env, sub_env, gapw, work_v_gspace, work_v_rspace, tddfpt_mgrid)
+      TYPE(pw_r3d_rs_type), DIMENSION(:), INTENT(INOUT)  :: A_ia_rspace
+      TYPE(pw_c1d_gs_type), INTENT(INOUT)                :: rho_ia_g
+      TYPE(local_rho_type), POINTER                      :: local_rho_set
+      TYPE(hartree_local_type), POINTER                  :: hartree_local
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(tddfpt_subgroup_env_type), INTENT(in)         :: sub_env
+      LOGICAL, INTENT(IN)                                :: gapw
+      TYPE(pw_c1d_gs_type), INTENT(INOUT)                :: work_v_gspace
+      TYPE(pw_r3d_rs_type), INTENT(INOUT)                :: work_v_rspace
+      LOGICAL, INTENT(IN)                                :: tddfpt_mgrid
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_apply_coulomb'
+
+      INTEGER                                            :: handle, ispin, nspins
+      REAL(kind=dp)                                      :: alpha, pair_energy
+      TYPE(pw_env_type), POINTER                         :: pw_env
+      TYPE(pw_poisson_type), POINTER                     :: poisson_env
+      TYPE(pw_pool_p_type), DIMENSION(:), POINTER        :: my_pools
+      TYPE(realspace_grid_desc_p_type), DIMENSION(:), &
+         POINTER                                         :: my_rs_descs
+      TYPE(realspace_grid_type), DIMENSION(:), POINTER   :: my_rs_grids
+
+      CALL timeset(routineN, handle)
+
+      nspins = SIZE(A_ia_rspace)
+      pw_env => sub_env%pw_env
+      IF (tddfpt_mgrid) THEN
+         CALL pw_env_get(pw_env, poisson_env=poisson_env, rs_grids=my_rs_grids, &
+                         rs_descs=my_rs_descs, pw_pools=my_pools)
+      ELSE
+         CALL pw_env_get(pw_env, poisson_env=poisson_env)
+      END IF
+
+      IF (nspins > 1) THEN
+         alpha = 1.0_dp
+      ELSE
+         ! spin-restricted case: alpha == 2 due to singlet state.
+         ! In case of triplet states alpha == 0, so we should not call this subroutine at all.
+         alpha = 2.0_dp
+      END IF
+
+      IF (gapw) THEN
+         CPASSERT(ASSOCIATED(local_rho_set))
+         CALL pw_axpy(local_rho_set%rho0_mpole%rho0_s_gs, rho_ia_g)
+         IF (ASSOCIATED(local_rho_set%rho0_mpole%rhoz_cneo_s_gs)) THEN
+            CALL pw_axpy(local_rho_set%rho0_mpole%rhoz_cneo_s_gs, rho_ia_g)
+         END IF
+      END IF
+
+      CALL pw_poisson_solve(poisson_env, rho_ia_g, pair_energy, work_v_gspace)
+      CALL pw_transfer(work_v_gspace, work_v_rspace)
+
+      ! (i a || j b) = ( i_alpha a_alpha + i_beta a_beta || j_alpha b_alpha + j_beta b_beta) =
+      !                tr (Cj_alpha^T * [J_i{alpha}a{alpha}_munu + J_i{beta}a{beta}_munu] * Cb_alpha) +
+      !                tr (Cj_beta^T * [J_i{alpha}a{alpha}_munu + J_i{beta}a{beta}_munu] * Cb_beta)
+      DO ispin = 1, nspins
+         CALL pw_axpy(work_v_rspace, A_ia_rspace(ispin), alpha)
+      END DO
+
+      IF (gapw) THEN
+         CALL Vh_1c_gg_integrals(qs_env, pair_energy, &
+                                 hartree_local%ecoul_1c, &
+                                 local_rho_set, &
+                                 sub_env%para_env, tddft=.TRUE., core_2nd=.TRUE.)
+         CALL pw_scale(work_v_rspace, work_v_rspace%pw_grid%dvol)
+         IF (tddfpt_mgrid) THEN
+            CALL integrate_vhg0_rspace(qs_env, work_v_rspace, sub_env%para_env, &
+                                       calculate_forces=.FALSE., &
+                                       local_rho_set=local_rho_set, my_pools=my_pools, &
+                                       my_rs_descs=my_rs_descs)
+         ELSE
+            CALL integrate_vhg0_rspace(qs_env, work_v_rspace, sub_env%para_env, &
+                                       calculate_forces=.FALSE., &
+                                       local_rho_set=local_rho_set)
+         END IF
+      END IF
+
+      CALL timestop(handle)
+
+   END SUBROUTINE tddfpt_apply_coulomb
+
+! **************************************************************************************************
+!> \brief Driver routine for applying fxc (analyic vs. finite difference for testing
+!> \param A_ia_rspace      action of TDDFPT operator on trial vectors expressed in a plane wave
+!>                         representation (modified on exit)
+!> \param kernel_env       kernel environment
+!> \param rho_ia_struct    response density for the given trial vector
+!> \param is_rks_triplets  indicates that the triplet excited states calculation using
+!>                         spin-unpolarised molecular orbitals has been requested
+!> \param pw_env           plain wave environment
+!> \param work_v_xc        work real-space grid to store the gradient of the exchange-correlation
+!>                         potential with respect to the response density (modified on exit)
+!> \param work_v_xc_tau ...
+!> \param spinflip ...
+! **************************************************************************************************
+   SUBROUTINE tddfpt_apply_xc(A_ia_rspace, kernel_env, rho_ia_struct, is_rks_triplets, &
+                              pw_env, work_v_xc, work_v_xc_tau, spinflip)
+
+      TYPE(pw_r3d_rs_type), DIMENSION(:), INTENT(INOUT)  :: A_ia_rspace
+      TYPE(full_kernel_env_type), INTENT(IN)             :: kernel_env
+      TYPE(qs_rho_type), POINTER                         :: rho_ia_struct
+      LOGICAL, INTENT(in)                                :: is_rks_triplets
+      TYPE(pw_env_type), POINTER                         :: pw_env
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: work_v_xc, work_v_xc_tau
+      INTEGER, INTENT(in), OPTIONAL                      :: spinflip
+
+      INTEGER                                            :: ispin, my_spinflip, nspins
+
+      nspins = SIZE(A_ia_rspace)
+      my_spinflip = 0
+      IF (PRESENT(spinflip)) my_spinflip = spinflip
+
+      IF (kernel_env%deriv2_analytic) THEN
+         CALL tddfpt_apply_xc_analytic(kernel_env, rho_ia_struct, is_rks_triplets, my_spinflip, &
+                                       nspins, pw_env, work_v_xc, work_v_xc_tau)
+      ELSE
+         CALL tddfpt_apply_xc_fd(kernel_env, rho_ia_struct, is_rks_triplets, nspins, &
+                                 pw_env, work_v_xc, work_v_xc_tau)
+      END IF
+
+      DO ispin = 1, nspins
+         ! pw2 = pw2 + alpha * pw1
+         CALL pw_axpy(work_v_xc(ispin), A_ia_rspace(ispin), kernel_env%alpha)
+      END DO
+
+   END SUBROUTINE tddfpt_apply_xc
+
+! **************************************************************************************************
+!> \brief Routine for applying fxc potential
+!> \param A_ia_rspace      action of TDDFPT operator on trial vectors expressed in a plane wave
+!>                         representation (modified on exit)
+!> \param fxc_rspace ...
+!> \param rho_ia_struct    response density for the given trial vector
+!> \param is_rks_triplets ...
+! **************************************************************************************************
+   SUBROUTINE tddfpt_apply_xc_potential(A_ia_rspace, fxc_rspace, rho_ia_struct, is_rks_triplets)
+
+      TYPE(pw_r3d_rs_type), DIMENSION(:), INTENT(INOUT)  :: A_ia_rspace
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: fxc_rspace
+      TYPE(qs_rho_type), POINTER                         :: rho_ia_struct
+      LOGICAL, INTENT(in)                                :: is_rks_triplets
+
+      INTEGER                                            :: nspins
+      REAL(KIND=dp)                                      :: alpha
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_r
+
+      nspins = SIZE(A_ia_rspace)
+
+      alpha = 1.0_dp
+
+      CALL qs_rho_get(rho_ia_struct, rho_r=rho1_r)
+
+      IF (nspins == 2) THEN
+         CALL pw_multiply(A_ia_rspace(1), fxc_rspace(1), rho1_r(1), alpha)
+         CALL pw_multiply(A_ia_rspace(1), fxc_rspace(2), rho1_r(2), alpha)
+         CALL pw_multiply(A_ia_rspace(2), fxc_rspace(3), rho1_r(2), alpha)
+         CALL pw_multiply(A_ia_rspace(2), fxc_rspace(2), rho1_r(1), alpha)
+      ELSE IF (is_rks_triplets) THEN
+         CALL pw_multiply(A_ia_rspace(1), fxc_rspace(1), rho1_r(1), alpha)
+         CALL pw_multiply(A_ia_rspace(1), fxc_rspace(2), rho1_r(1), -alpha)
+      ELSE
+         CALL pw_multiply(A_ia_rspace(1), fxc_rspace(1), rho1_r(1), alpha)
+         CALL pw_multiply(A_ia_rspace(1), fxc_rspace(2), rho1_r(1), alpha)
+      END IF
+
+   END SUBROUTINE tddfpt_apply_xc_potential
+
+! **************************************************************************************************
+!> \brief Update A_ia_munu by adding exchange-correlation term.
+!> \param kernel_env       kernel environment
+!> \param rho_ia_struct    response density for the given trial vector
+!> \param is_rks_triplets  indicates that the triplet excited states calculation using
+!>                         spin-unpolarised molecular orbitals has been requested
+!> \param spinflip ...
+!> \param nspins ...
+!> \param pw_env           plain wave environment
+!> \param work_v_xc        work real-space grid to store the gradient of the exchange-correlation
+!>                         potential with respect to the response density (modified on exit)
+!> \param work_v_xc_tau ...
+!> \par History
+!>    * 05.2016 compute all kernel terms in one go [Sergey Chulkov]
+!>    * 03.2017 proceed excited states sequentially; minimise the number of conversions between
+!>              DBCSR and FM matrices [Sergey Chulkov]
+!>    * 06.2018 return the action expressed in the plane wave representation instead of the one
+!>              in the atomic basis set representation
+!> \note Based on the subroutine kpp1_calc_k_p_p1() which was originally created by
+!>       Mohamed Fawzi on 10.2002.
+! **************************************************************************************************
+   SUBROUTINE tddfpt_apply_xc_analytic(kernel_env, rho_ia_struct, is_rks_triplets, spinflip, &
+                                       nspins, pw_env, work_v_xc, work_v_xc_tau)
+      TYPE(full_kernel_env_type), INTENT(in)             :: kernel_env
+      TYPE(qs_rho_type), POINTER                         :: rho_ia_struct
+      LOGICAL, INTENT(in)                                :: is_rks_triplets
+      INTEGER, INTENT(in)                                :: spinflip, nspins
+      TYPE(pw_env_type), POINTER                         :: pw_env
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: work_v_xc, work_v_xc_tau
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_apply_xc_analytic'
+
+      INTEGER                                            :: handle, ispin
+      LOGICAL                                            :: do_spinflip
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_ia_g, rho_ia_g2
+      TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_ia_r, rho_ia_r2, tau_ia_r, tau_ia_r2
+
+      CALL timeset(routineN, handle)
+
+      CALL qs_rho_get(rho_ia_struct, rho_g=rho_ia_g, rho_r=rho_ia_r, tau_r=tau_ia_r)
+      CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
+
+      IF (debug_this_module) THEN
+         CPASSERT(SIZE(rho_ia_g) == nspins)
+         CPASSERT(SIZE(rho_ia_r) == nspins)
+         CPASSERT((.NOT. ASSOCIATED(tau_ia_r)) .OR. SIZE(tau_ia_r) == nspins)
+         CPASSERT((.NOT. is_rks_triplets) .OR. nspins == 1)
+         CPASSERT((spinflip /= no_sf_tddfpt) .EQV. (nspins == 2))
+      END IF
+
+      IF (spinflip == tddfpt_sf_noncol) THEN
+         do_spinflip = .TRUE.
+      ELSE
+         do_spinflip = .FALSE.
+      END IF
+
+      NULLIFY (tau_ia_r2)
+      IF (is_rks_triplets) THEN
+         ALLOCATE (rho_ia_r2(2))
+         ALLOCATE (rho_ia_g2(2))
+         rho_ia_r2(1) = rho_ia_r(1)
+         rho_ia_r2(2) = rho_ia_r(1)
+         rho_ia_g2(1) = rho_ia_g(1)
+         rho_ia_g2(2) = rho_ia_g(1)
+
+         IF (ASSOCIATED(tau_ia_r)) THEN
+            ALLOCATE (tau_ia_r2(2))
+            tau_ia_r2(1) = tau_ia_r(1)
+            tau_ia_r2(2) = tau_ia_r(1)
+         END IF
+      ELSE
+         rho_ia_r2 => rho_ia_r
+         rho_ia_g2 => rho_ia_g
+
+         tau_ia_r2 => tau_ia_r
+      END IF
+
+      DO ispin = 1, nspins
+         CALL pw_zero(work_v_xc(ispin))
+         IF (ASSOCIATED(work_v_xc_tau)) CALL pw_zero(work_v_xc_tau(ispin))
+      END DO
+
+      CALL xc_rho_set_update(rho_set=kernel_env%xc_rho1_set, rho_r=rho_ia_r2, rho_g=rho_ia_g2, tau=tau_ia_r2, &
+                             needs=kernel_env%xc_rho1_cflags, xc_deriv_method_id=kernel_env%deriv_method_id, &
+                             xc_rho_smooth_id=kernel_env%rho_smooth_id, pw_pool=auxbas_pw_pool)
+
+      CALL xc_calc_2nd_deriv_analytical(v_xc=work_v_xc, v_xc_tau=work_v_xc_tau, deriv_set=kernel_env%xc_deriv_set, &
+                                        rho_set=kernel_env%xc_rho_set, &
+                                        rho1_set=kernel_env%xc_rho1_set, pw_pool=auxbas_pw_pool, &
+                                        xc_section=kernel_env%xc_section, gapw=.FALSE., tddfpt_fac=kernel_env%beta, &
+                                        spinflip=do_spinflip)
+
+      IF (is_rks_triplets) THEN
+         DEALLOCATE (rho_ia_r2)
+         DEALLOCATE (rho_ia_g2)
+         IF (ASSOCIATED(tau_ia_r2)) DEALLOCATE (tau_ia_r2)
+      END IF
+
+      CALL timestop(handle)
+
+   END SUBROUTINE tddfpt_apply_xc_analytic
+
+! **************************************************************************************************
+!> \brief Update A_ia_munu by adding exchange-correlation term using finite difference methods.
+!> \param kernel_env       kernel environment
+!> \param rho_ia_struct    response density for the given trial vector
+!> \param is_rks_triplets  indicates that the triplet excited states calculation using
+!>                         spin-unpolarised molecular orbitals has been requested
+!> \param nspins ...
+!> \param pw_env           plain wave environment
+!> \param work_v_xc        work real-space grid to store the gradient of the exchange-correlation
+!>                         potential with respect to the response density (modified on exit)
+!> \param work_v_xc_tau ...
+! **************************************************************************************************
+   SUBROUTINE tddfpt_apply_xc_fd(kernel_env, rho_ia_struct, is_rks_triplets, nspins, &
+                                 pw_env, work_v_xc, work_v_xc_tau)
+      TYPE(full_kernel_env_type), INTENT(in)             :: kernel_env
+      TYPE(qs_rho_type), POINTER                         :: rho_ia_struct
+      LOGICAL, INTENT(in)                                :: is_rks_triplets
+      INTEGER, INTENT(in)                                :: nspins
+      TYPE(pw_env_type), POINTER                         :: pw_env
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: work_v_xc, work_v_xc_tau
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_apply_xc_fd'
+
+      INTEGER                                            :: handle, ispin
+      LOGICAL                                            :: lsd, singlet, triplet
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho1_g
+      TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_r, tau1_r
+      TYPE(xc_rho_set_type), POINTER                     :: rho_set
+
+      CALL timeset(routineN, handle)
+
+      CALL qs_rho_get(rho_ia_struct, rho_r=rho1_r, rho_g=rho1_g, tau_r=tau1_r)
+      CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
+      DO ispin = 1, nspins
+         CALL pw_zero(work_v_xc(ispin))
+      END DO
+      rho_set => kernel_env%xc_rho_set
+
+      singlet = .FALSE.
+      triplet = .FALSE.
+      lsd = .FALSE.
+      IF (nspins == 1 .AND. .NOT. is_rks_triplets) THEN
+         singlet = .TRUE.
+      ELSE IF (nspins == 1 .AND. is_rks_triplets) THEN
+         triplet = .TRUE.
+      ELSE IF (nspins == 2) THEN
+         lsd = .TRUE.
+      ELSE
+         CPABORT("illegal options")
+      END IF
+
+      IF (ASSOCIATED(tau1_r)) THEN
+         DO ispin = 1, nspins
+            CALL pw_zero(work_v_xc_tau(ispin))
+         END DO
+      END IF
+
+      CALL xc_calc_2nd_deriv_numerical(work_v_xc, work_v_xc_tau, rho_set, rho1_r, rho1_g, tau1_r, &
+                                       auxbas_pw_pool, kernel_env%xc_section, &
+                                       is_rks_triplets)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE tddfpt_apply_xc_fd
+
+! **************************************************************************************************
+!> \brief Update action of TDDFPT operator on trial vectors by adding exact-exchange term.
+!> \param Aop_evects      action of TDDFPT operator on trial vectors (modified on exit)
+!> \param evects          trial vectors
+!> \param gs_mos          molecular orbitals optimised for the ground state (only occupied
+!>                        molecular orbitals [component %mos_occ] are needed)
+!> \param do_admm         perform auxiliary density matrix method calculations
+!> \param qs_env          Quickstep environment
+!> \param work_rho_ia_ao_symm ...
+!> \param work_hmat_symm ...
+!> \param work_rho_ia_ao_asymm ...
+!> \param work_hmat_asymm ...
+!> \param wfm_rho_orb ...
+!> \par History
+!>    * 05.2016 compute all exact-exchange terms in one go [Sergey Chulkov]
+!>    * 03.2017 code related to ADMM correction is now moved to tddfpt_apply_admm_correction()
+!>              in order to compute this correction within parallel groups [Sergey Chulkov]
+!> \note Based on the subroutine kpp1_calc_k_p_p1() which was originally created by
+!>       Mohamed Fawzi on 10.2002.
+! **************************************************************************************************
+   SUBROUTINE tddfpt_apply_hfx(Aop_evects, evects, gs_mos, do_admm, qs_env, &
+                               work_rho_ia_ao_symm, work_hmat_symm, work_rho_ia_ao_asymm, &
+                               work_hmat_asymm, wfm_rho_orb)
+      TYPE(cp_fm_type), DIMENSION(:, :), INTENT(INOUT)   :: Aop_evects
+      TYPE(cp_fm_type), DIMENSION(:, :), INTENT(IN)      :: evects
+      TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
+         INTENT(in)                                      :: gs_mos
+      LOGICAL, INTENT(in)                                :: do_admm
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(dbcsr_p_type), DIMENSION(:), INTENT(INOUT)    :: work_rho_ia_ao_symm
+      TYPE(dbcsr_p_type), DIMENSION(:), INTENT(INOUT), &
+         TARGET                                          :: work_hmat_symm
+      TYPE(dbcsr_p_type), DIMENSION(:), INTENT(INOUT)    :: work_rho_ia_ao_asymm
+      TYPE(dbcsr_p_type), DIMENSION(:), INTENT(INOUT), &
+         TARGET                                          :: work_hmat_asymm
+      TYPE(cp_fm_type), INTENT(IN)                       :: wfm_rho_orb
+
+      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddfpt_apply_hfx'
+
+      INTEGER                                            :: handle, ispin, ivect, nao, nao_aux, &
+                                                            nspins, nvects
+      INTEGER, DIMENSION(maxspins)                       :: nactive
+      LOGICAL                                            :: do_hfx
+      REAL(kind=dp)                                      :: alpha
+      TYPE(admm_type), POINTER                           :: admm_env
+      TYPE(section_vals_type), POINTER                   :: hfx_section, input
+
+      CALL timeset(routineN, handle)
+
+      ! Check for hfx section
+      CALL get_qs_env(qs_env, input=input)
+      hfx_section => section_vals_get_subs_vals(input, "DFT%XC%HF")
+      CALL section_vals_get(hfx_section, explicit=do_hfx)
+
+      IF (do_hfx) THEN
+         nspins = SIZE(evects, 1)
+         nvects = SIZE(evects, 2)
+
+         IF (SIZE(gs_mos) > 1) THEN
+            alpha = 1.0_dp
+         ELSE
+            alpha = 2.0_dp
+         END IF
+
+         CALL cp_fm_get_info(evects(1, 1), nrow_global=nao)
+         DO ispin = 1, nspins
+            CALL cp_fm_get_info(evects(ispin, 1), ncol_global=nactive(ispin))
+         END DO
+
+         IF (do_admm) THEN
+            CALL get_qs_env(qs_env, admm_env=admm_env)
+            CALL cp_fm_get_info(admm_env%A, nrow_global=nao_aux)
+         END IF
+
+         !Note: the symmetrized transition density matrix is P = 0.5*(C*evect^T + evect*C^T)
+         !      in the end, we only want evect*C^T for consistency with the MO formulation of TDDFT
+         !      therefore, we go in 2 steps: with the symmetric 0.5*(C*evect^T + evect*C^T) and
+         !      the antisymemtric 0.5*(C*evect^T - evect*C^T)
+
+         ! some stuff from qs_ks_build_kohn_sham_matrix
+         ! TO DO: add SIC support
+         DO ivect = 1, nvects
+            DO ispin = 1, nspins
+
+               !The symmetric density matrix
+               CALL parallel_gemm('N', 'T', nao, nao, nactive(ispin), 0.5_dp, evects(ispin, ivect), &
+                                  gs_mos(ispin)%mos_active, 0.0_dp, wfm_rho_orb)
+               CALL parallel_gemm('N', 'T', nao, nao, nactive(ispin), 0.5_dp, gs_mos(ispin)%mos_active, &
+                                  evects(ispin, ivect), 1.0_dp, wfm_rho_orb)
+
+               CALL dbcsr_set(work_hmat_symm(ispin)%matrix, 0.0_dp)
+               IF (do_admm) THEN
+                  CALL parallel_gemm('N', 'N', nao_aux, nao, nao, 1.0_dp, admm_env%A, &
+                                     wfm_rho_orb, 0.0_dp, admm_env%work_aux_orb)
+                  CALL parallel_gemm('N', 'T', nao_aux, nao_aux, nao, 1.0_dp, admm_env%work_aux_orb, admm_env%A, &
+                                     0.0_dp, admm_env%work_aux_aux)
+                  CALL copy_fm_to_dbcsr(admm_env%work_aux_aux, work_rho_ia_ao_symm(ispin)%matrix, keep_sparsity=.TRUE.)
+               ELSE
+                  CALL copy_fm_to_dbcsr(wfm_rho_orb, work_rho_ia_ao_symm(ispin)%matrix, keep_sparsity=.TRUE.)
+               END IF
+            END DO
+
+            CALL tddft_hfx_matrix(work_hmat_symm, work_rho_ia_ao_symm, qs_env)
+
+            IF (do_admm) THEN
+               DO ispin = 1, nspins
+                  CALL cp_dbcsr_sm_fm_multiply(work_hmat_symm(ispin)%matrix, admm_env%A, admm_env%work_aux_orb, &
+                                               ncol=nao, alpha=1.0_dp, beta=0.0_dp)
+
+                  CALL parallel_gemm('T', 'N', nao, nao, nao_aux, 1.0_dp, admm_env%A, &
+                                     admm_env%work_aux_orb, 0.0_dp, wfm_rho_orb)
+
+                  CALL parallel_gemm('N', 'N', nao, nactive(ispin), nao, alpha, wfm_rho_orb, &
+                                     gs_mos(ispin)%mos_active, 1.0_dp, Aop_evects(ispin, ivect))
+               END DO
+            ELSE
+               DO ispin = 1, nspins
+                  CALL cp_dbcsr_sm_fm_multiply(work_hmat_symm(ispin)%matrix, gs_mos(ispin)%mos_active, &
+                                               Aop_evects(ispin, ivect), ncol=nactive(ispin), &
+                                               alpha=alpha, beta=1.0_dp)
+               END DO
+            END IF
+
+            !The anti-symmetric density matrix
+            DO ispin = 1, nspins
+
+               !The symmetric density matrix
+               CALL parallel_gemm('N', 'T', nao, nao, nactive(ispin), 0.5_dp, evects(ispin, ivect), &
+                                  gs_mos(ispin)%mos_active, 0.0_dp, wfm_rho_orb)
+               CALL parallel_gemm('N', 'T', nao, nao, nactive(ispin), -0.5_dp, gs_mos(ispin)%mos_active, &
+                                  evects(ispin, ivect), 1.0_dp, wfm_rho_orb)
+
+               CALL dbcsr_set(work_hmat_asymm(ispin)%matrix, 0.0_dp)
+               IF (do_admm) THEN
+                  CALL parallel_gemm('N', 'N', nao_aux, nao, nao, 1.0_dp, admm_env%A, &
+                                     wfm_rho_orb, 0.0_dp, admm_env%work_aux_orb)
+                  CALL parallel_gemm('N', 'T', nao_aux, nao_aux, nao, 1.0_dp, admm_env%work_aux_orb, admm_env%A, &
+                                     0.0_dp, admm_env%work_aux_aux)
+                  CALL copy_fm_to_dbcsr(admm_env%work_aux_aux, work_rho_ia_ao_asymm(ispin)%matrix, keep_sparsity=.TRUE.)
+               ELSE
+                  CALL copy_fm_to_dbcsr(wfm_rho_orb, work_rho_ia_ao_asymm(ispin)%matrix, keep_sparsity=.TRUE.)
+               END IF
+            END DO
+
+            CALL tddft_hfx_matrix(work_hmat_asymm, work_rho_ia_ao_asymm, qs_env)
+
+            IF (do_admm) THEN
+               DO ispin = 1, nspins
+                  CALL cp_dbcsr_sm_fm_multiply(work_hmat_asymm(ispin)%matrix, admm_env%A, admm_env%work_aux_orb, &
+                                               ncol=nao, alpha=1.0_dp, beta=0.0_dp)
+
+                  CALL parallel_gemm('T', 'N', nao, nao, nao_aux, 1.0_dp, admm_env%A, &
+                                     admm_env%work_aux_orb, 0.0_dp, wfm_rho_orb)
+
+                  CALL parallel_gemm('N', 'N', nao, nactive(ispin), nao, alpha, wfm_rho_orb, &
+                                     gs_mos(ispin)%mos_active, 1.0_dp, Aop_evects(ispin, ivect))
+               END DO
+            ELSE
+               DO ispin = 1, nspins
+                  CALL cp_dbcsr_sm_fm_multiply(work_hmat_asymm(ispin)%matrix, gs_mos(ispin)%mos_active, &
+                                               Aop_evects(ispin, ivect), ncol=nactive(ispin), &
+                                               alpha=alpha, beta=1.0_dp)
+               END DO
+            END IF
+         END DO
+      END IF
+
+      CALL timestop(handle)
+
+   END SUBROUTINE tddfpt_apply_hfx
+
+! **************************************************************************************************
+!> \brief Update action of TDDFPT operator on trial vectors by adding exact-exchange term.
+!> \param Aop_evects      action of TDDFPT operator on trial vectors (modified on exit)
+!> \param evects          trial vectors
+!> \param gs_mos          molecular orbitals optimised for the ground state (only occupied
+!>                        molecular orbitals [component %mos_occ] are needed)
+!> \param qs_env          Quickstep environment
+!> \param admm_env ...
+!> \param hfx_section ...
+!> \param x_data ...
+!> \param symmetry ...
+!> \param recalc_integrals ...
+!> \param work_rho_ia_ao ...
+!> \param work_hmat ...
+!> \param wfm_rho_orb ...
+! **************************************************************************************************
+   SUBROUTINE tddfpt_apply_hfxsr_kernel(Aop_evects, evects, gs_mos, qs_env, admm_env, &
+                                        hfx_section, x_data, symmetry, recalc_integrals, &
+                                        work_rho_ia_ao, work_hmat, wfm_rho_orb)
+      TYPE(cp_fm_type), DIMENSION(:, :), INTENT(in)      :: Aop_evects, evects
+      TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
+         INTENT(in)                                      :: gs_mos
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(admm_type), POINTER                           :: admm_env
+      TYPE(section_vals_type), POINTER                   :: hfx_section
+      TYPE(hfx_type), DIMENSION(:, :), POINTER           :: x_data
+      INTEGER, INTENT(IN)                                :: symmetry
+      LOGICAL, INTENT(IN)                                :: recalc_integrals
+      TYPE(dbcsr_p_type), DIMENSION(:), INTENT(INOUT)    :: work_rho_ia_ao
+      TYPE(dbcsr_p_type), DIMENSION(:), INTENT(INOUT), &
+         TARGET                                          :: work_hmat
+      TYPE(cp_fm_type), INTENT(IN)                       :: wfm_rho_orb
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_apply_hfxsr_kernel'
+
+      INTEGER                                            :: handle, ispin, ivect, nao, nao_aux, &
+                                                            nspins, nvects
+      INTEGER, DIMENSION(maxspins)                       :: nactive
+      LOGICAL                                            :: reint
+      REAL(kind=dp)                                      :: alpha
+
+      CALL timeset(routineN, handle)
+
+      nspins = SIZE(evects, 1)
+      nvects = SIZE(evects, 2)
+
+      alpha = 2.0_dp
+      IF (nspins > 1) alpha = 1.0_dp
+
+      CALL cp_fm_get_info(evects(1, 1), nrow_global=nao)
+      CALL cp_fm_get_info(admm_env%A, nrow_global=nao_aux)
+      DO ispin = 1, nspins
+         CALL cp_fm_get_info(evects(ispin, 1), ncol_global=nactive(ispin))
+      END DO
+
+      reint = recalc_integrals
+
+      DO ivect = 1, nvects
+         DO ispin = 1, nspins
+            CALL parallel_gemm('N', 'T', nao, nao, nactive(ispin), 0.5_dp, evects(ispin, ivect), &
+                               gs_mos(ispin)%mos_active, 0.0_dp, wfm_rho_orb)
+            CALL parallel_gemm('N', 'T', nao, nao, nactive(ispin), 0.5_dp*symmetry, gs_mos(ispin)%mos_active, &
+                               evects(ispin, ivect), 1.0_dp, wfm_rho_orb)
+            CALL dbcsr_set(work_hmat(ispin)%matrix, 0.0_dp)
+            CALL parallel_gemm('N', 'N', nao_aux, nao, nao, 1.0_dp, admm_env%A, &
+                               wfm_rho_orb, 0.0_dp, admm_env%work_aux_orb)
+            CALL parallel_gemm('N', 'T', nao_aux, nao_aux, nao, 1.0_dp, admm_env%work_aux_orb, admm_env%A, &
+                               0.0_dp, admm_env%work_aux_aux)
+            CALL copy_fm_to_dbcsr(admm_env%work_aux_aux, work_rho_ia_ao(ispin)%matrix, keep_sparsity=.TRUE.)
+         END DO
+
+         CALL tddft_hfx_matrix(work_hmat, work_rho_ia_ao, qs_env, .FALSE., reint, hfx_section, x_data)
+         reint = .FALSE.
+
+         DO ispin = 1, nspins
+            CALL cp_dbcsr_sm_fm_multiply(work_hmat(ispin)%matrix, admm_env%A, admm_env%work_aux_orb, &
+                                         ncol=nao, alpha=1.0_dp, beta=0.0_dp)
+            CALL parallel_gemm('T', 'N', nao, nao, nao_aux, 1.0_dp, admm_env%A, &
+                               admm_env%work_aux_orb, 0.0_dp, wfm_rho_orb)
+            CALL parallel_gemm('N', 'N', nao, nactive(ispin), nao, alpha, wfm_rho_orb, &
+                               gs_mos(ispin)%mos_active, 1.0_dp, Aop_evects(ispin, ivect))
+         END DO
+      END DO
+
+      CALL timestop(handle)
+
+   END SUBROUTINE tddfpt_apply_hfxsr_kernel
+
+! **************************************************************************************************
+!> \brief ...Calculate the HFXLR kernel contribution by contracting the Lowdin MO coefficients --
+!>           transition charges with the exchange-type integrals using the sTDA approximation
+!> \param qs_env ...
+!> \param sub_env ...
+!> \param rcut ...
+!> \param hfx_scale ...
+!> \param work ...
+!> \param X ...
+!> \param res ... vector AX with A being the sTDA matrix and X the Davidson trial vector of the
+!>                eigenvalue problem A*X = omega*X
+! **************************************************************************************************
+   SUBROUTINE tddfpt_apply_hfxlr_kernel(qs_env, sub_env, rcut, hfx_scale, work, X, res)
+
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(tddfpt_subgroup_env_type)                     :: sub_env
+      REAL(KIND=dp), INTENT(IN)                          :: rcut, hfx_scale
+      TYPE(tddfpt_work_matrices)                         :: work
+      TYPE(cp_fm_type), DIMENSION(:), INTENT(IN)         :: X
+      TYPE(cp_fm_type), DIMENSION(:), INTENT(INOUT)      :: res
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'tddfpt_apply_hfxlr_kernel'
+
+      INTEGER                                            :: handle, iatom, ispin, jatom, natom, &
+                                                            nsgf, nspins
+      INTEGER, DIMENSION(2)                              :: nactive
+      REAL(KIND=dp)                                      :: dr, eps_filter, fcut, gabr
+      REAL(KIND=dp), DIMENSION(3)                        :: rij
+      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: pblock
+      TYPE(cell_type), POINTER                           :: cell
+      TYPE(cp_fm_struct_type), POINTER                   :: fmstruct
+      TYPE(cp_fm_type)                                   :: cvec
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: xtransformed
+      TYPE(cp_fm_type), POINTER                          :: ct
+      TYPE(dbcsr_iterator_type)                          :: iter
+      TYPE(dbcsr_type)                                   :: pdens
+      TYPE(dbcsr_type), POINTER                          :: tempmat
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+
+      CALL timeset(routineN, handle)
+
+      ! parameters
+      eps_filter = 1.E-08_dp
+
+      nspins = SIZE(X)
+      DO ispin = 1, nspins
+         CALL cp_fm_get_info(X(ispin), ncol_global=nactive(ispin))
+      END DO
+
+      para_env => sub_env%para_env
+
+      CALL get_qs_env(qs_env, natom=natom, cell=cell, particle_set=particle_set)
+
+      ! calculate Loewdin transformed Davidson trial vector tilde(X)=S^1/2*X
+      ! and tilde(tilde(X))=S^1/2_A*tilde(X)_A
+      ALLOCATE (xtransformed(nspins))
+      DO ispin = 1, nspins
+         NULLIFY (fmstruct)
+         ct => work%ctransformed(ispin)
+         CALL cp_fm_get_info(ct, matrix_struct=fmstruct)
+         CALL cp_fm_create(matrix=xtransformed(ispin), matrix_struct=fmstruct, name="XTRANSFORMED")
+      END DO
+      CALL get_lowdin_x(work%shalf, X, xtransformed)
+
+      DO ispin = 1, nspins
+         ct => work%ctransformed(ispin)
+         CALL cp_fm_get_info(ct, matrix_struct=fmstruct, nrow_global=nsgf)
+         CALL cp_fm_create(cvec, fmstruct)
+         !
+         tempmat => work%shalf
+         CALL dbcsr_create(pdens, template=tempmat, matrix_type=dbcsr_type_no_symmetry)
+         ! P(nu,mu) = SUM_j XT(nu,j)*CT(mu,j)
+         ct => work%ctransformed(ispin)
+         CALL dbcsr_set(pdens, 0.0_dp)
+         CALL cp_dbcsr_plus_fm_fm_t(pdens, xtransformed(ispin), ct, nactive(ispin), &
+                                    1.0_dp, keep_sparsity=.FALSE.)
+         CALL dbcsr_filter(pdens, eps_filter)
+         ! Apply PP*gab -> PP; gab = gamma_coulomb
+         ! P(nu,mu) = P(nu,mu)*g(a of nu,b of mu)
+         CALL dbcsr_iterator_start(iter, pdens)
+         DO WHILE (dbcsr_iterator_blocks_left(iter))
+            CALL dbcsr_iterator_next_block(iter, iatom, jatom, pblock)
+            rij = particle_set(iatom)%r - particle_set(jatom)%r
+            rij = pbc(rij, cell)
+            dr = SQRT(SUM(rij(:)**2))
+            gabr = 1._dp/rcut
+            IF (dr < 1.e-6) THEN
+               gabr = 2._dp*gabr/SQRT(3.1415926_dp)
+            ELSE
+               gabr = ERF(gabr*dr)/dr
+               fcut = EXP(dr - 4._dp*rcut)
+               fcut = fcut/(fcut + 1._dp)
+            END IF
+            pblock = hfx_scale*gabr*pblock
+         END DO
+         CALL dbcsr_iterator_stop(iter)
+         ! CV(mu,i) = P(nu,mu)*CT(mu,i)
+         CALL cp_dbcsr_sm_fm_multiply(pdens, ct, cvec, nactive(ispin), 1.0_dp, 0.0_dp)
+         ! rho(nu,i) = rho(nu,i) + ShalfP(nu,mu)*CV(mu,i)
+         CALL cp_dbcsr_sm_fm_multiply(work%shalf, cvec, res(ispin), nactive(ispin), &
+                                      -1.0_dp, 1.0_dp)
+         !
+         CALL dbcsr_release(pdens)
+         !
+         CALL cp_fm_release(cvec)
+      END DO
+
+      CALL cp_fm_release(xtransformed)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE tddfpt_apply_hfxlr_kernel
+
+! **************************************************************************************************
+
+END MODULE qs_tddfpt2_operators

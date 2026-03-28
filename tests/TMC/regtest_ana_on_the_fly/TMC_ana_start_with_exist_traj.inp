@@ -1,0 +1,75 @@
+# TMC parallel tempering run with analysis output
+# starting the analysis with an existing trajectory
+# hence first the old data has to be read and analyzed, then
+# calculating the density, radial distribution function and the classical dipole moments
+&GLOBAL
+  PRINT_LEVEL LOW
+  PROGRAM TMC
+  PROJECT H2O_TMC
+  RUN_TYPE TMC
+  #TRACE
+  WALLTIME 00:10:25
+&END GLOBAL
+
+&MOTION
+  &TMC
+    ENERGY_FILE_NAME H2O.inp
+    ESIMATE_ACC_PROB .TRUE.
+    GROUP_ANALYSIS_NR 1
+    GROUP_CC_SIZE 0
+    GROUP_ENERGY_NR 1
+    GROUP_ENERGY_SIZE 1
+    INFO_OUT_STEP_SIZE 100
+    NR_TEMPERATURE 3
+    NUM_MC_ELEM 100
+    NUM_MV_ELEM_IN_CELL 0
+    PRESSURE 1.0
+    #PRINT_DIPOLE          .TRUE.  # (classical) dipoles are not provided without analysis
+    PRINT_CELL .TRUE.
+    PRINT_COORDS .TRUE.
+    PRINT_ENERGIES .TRUE.
+    PRINT_FORCES .TRUE.
+    PRINT_ONLY_ACC .TRUE.
+    PRINT_TEST_OUTPUT
+    RESTART_IN
+    RESTART_OUT 0
+    RND_DETERMINISTIC 42
+    SPECULATIVE_CANCELING .TRUE.
+    TEMPERATURE 300 460
+    &MOVE_TYPE ATOM_TRANS
+      INIT_ACC_PROB 0.2
+      PROB 1
+      SIZE 0.05
+    &END MOVE_TYPE
+    &MOVE_TYPE MOL_TRANS
+      PROB 1
+      SIZE 0.1
+    &END MOVE_TYPE
+    &MOVE_TYPE MOL_ROT
+      PROB 1
+      SIZE 4
+    &END MOVE_TYPE
+    &MOVE_TYPE PT_SWAP
+      PROB 3
+    &END MOVE_TYPE
+    &MOVE_TYPE VOL_MOVE
+      PROB 1
+      SIZE 0.1
+    &END MOVE_TYPE
+    &TMC_ANALYSIS
+      CLASSICAL_DIPOLE_MOMENTS
+      DENSITY 2 1 1
+      DEVIATION
+      G_R
+      RESTART .TRUE.
+      &CHARGE
+        ATOM O
+        CHARGE -0.834
+      &END CHARGE
+      &CHARGE
+        ATOM H
+        CHARGE 0.417
+      &END CHARGE
+    &END TMC_ANALYSIS
+  &END TMC
+&END MOTION

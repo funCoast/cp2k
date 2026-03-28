@@ -1,0 +1,297 @@
+#CPQA INCLUDE dimer.xyz
+#CPQA INCLUDE topology_atoms.psf
+!!cp2k!!
+!! inp file by Alin M Elena
+!! alinm.elena@gmail.com
+!! http://alin.elenaworld.net
+#global section sets what kind of calculations you want to do an general
+! settings
+@SET pfreq 100 ! the frequency for printing .cube properties and restart files
+@SET name dimer
+@SET period T
+@SET method GPW ! use GAPW/ GPW for dft
+@SET zk 10.0  ! coupling constant for collective variables and atoms
+@SET zmass 100.0 ! mass for collective variables
+@SET zgamma 0.001 ! friction coefficient for lagrange equations for cvs
+@SET Tz  3000.0 ! temperature
+@SET Nz 1   ! number of steps to integrate z
+@SET dtz 0.5 ! time step to integrate the z
+@SET dt 1.0 ! time steps to integrate atoms
+@SET N 1 ! the length of the mini-trajectory
+@SET M 2 ! number of cycles/steps for the HMC part
+@SET Temp 25 ! physical system temperature
+&GLOBAL
+  ECHO_INPUT yes
+  PREFERRED_FFT_LIBRARY FFTSG
+  !   Run_type MD
+  !  Run_type GEOMETRY_OPTIMIZATION
+  PRINT_LEVEL low
+  PROJECT ${name}
+  !   Run_type ENERGY_Force
+  RUN_TYPE TAMC
+  WALLTIME 3600
+  &PRINT
+    FILENAME =./${name}
+  &END PRINT
+&END GLOBAL
+
+#defines how forces are evaluated
+&FORCE_EVAL
+  METHOD QS  ! what is the method used for computing the energy
+  STRESS_TENSOR analytical
+  &DFT  ! dft settings
+    BASIS_SET_FILE_NAME BASIS_SET
+    CHARGE 0
+    POTENTIAL_FILE_NAME POTENTIAL
+    &LOCALIZE True
+      EPS_LOCALIZATION 1.0e-4
+      EPS_OCCUPATION 1.0e-6
+      MIN_OR_MAX SpreadMin
+      RESTART false
+      STATES Occupied
+      USE_HISTORY true
+      &PRINT
+        &MOLECULAR_DIPOLES Off
+          ADD_LAST numeric
+          PERIODIC ${period}
+          REFERENCE zero
+          REFERENCE_POINT 0.0 0.0 0.0
+          &EACH
+            MD 10
+          &END EACH
+        &END MOLECULAR_DIPOLES
+        &MOLECULAR_STATES off
+          ADD_LAST numeric
+          &EACH
+            MD 10
+          &END EACH
+        &END MOLECULAR_STATES
+        &TOTAL_DIPOLE On
+          ADD_LAST numeric
+          PERIODIC ${period}
+          REFERENCE zero
+          REFERENCE_POINT 0.0 0.0 0.0
+          &EACH
+            MD 10
+          &END EACH
+        &END TOTAL_DIPOLE
+        &WANNIER_CENTERS
+          ADD_LAST numeric
+          FORMAT xyz
+          IONS+CENTERS true
+          &EACH
+            MD 1
+          &END EACH
+        &END WANNIER_CENTERS
+        &WANNIER_STATES on
+          ADD_LAST numeric
+          &EACH
+            MD 1
+          &END EACH
+        &END WANNIER_STATES
+      &END PRINT
+    &END LOCALIZE
+    &MGRID
+      CUTOFF 50
+    &END MGRID
+    &POISSON
+      PERIODIC None
+      POISSON_SOLVER MT
+      &MT
+      &END MT
+    &END POISSON
+    &PRINT
+      &EFIELD_CUBE Medium
+        ADD_LAST Numeric
+        &EACH
+          MD ${pfreq}
+        &END EACH
+      &END EFIELD_CUBE
+      &E_DENSITY_CUBE Medium
+        ADD_LAST Numeric
+        &EACH
+          MD ${pfreq}
+        &END EACH
+      &END E_DENSITY_CUBE
+      &MO_CUBES Medium
+        ADD_LAST Numeric
+        &EACH
+          MD 1
+        &END EACH
+      &END MO_CUBES
+      &TOT_DENSITY_CUBE Medium
+        ADD_LAST Numeric
+        &EACH
+          MD ${pfreq}
+        &END EACH
+      &END TOT_DENSITY_CUBE
+      &V_HARTREE_CUBE Medium
+        ADD_LAST Numeric
+        &EACH
+          MD ${pfreq}
+        &END EACH
+      &END V_HARTREE_CUBE
+    &END PRINT
+    &QS
+      EPS_DEFAULT 1.0e-12
+      EXTRAPOLATION ASPC
+      EXTRAPOLATION_ORDER 3
+      METHOD ${method}
+      &DFTB
+        DISPERSION T
+        DO_EWALD T
+        ORTHOGONAL_BASIS F
+        SELF_CONSISTENT T
+        &PARAMETER
+          PARAM_FILE_NAME scc_parameter
+          PARAM_FILE_PATH params_scc
+          UFF_FORCE_FIELD uff_table
+        &END PARAMETER
+      &END DFTB
+    &END QS
+    &SCF  ! the scf settings...
+      EPS_SCF 1.e-1
+      MAX_SCF 20
+      SCF_GUESS Atomic
+      &MIXING
+        METHOD Pulay_Mixing
+        NBUFFER 5
+        NMIXING 1
+        PULAY_ALPHA 0.3
+        PULAY_BETA 0.5
+      &END MIXING
+      &OT T  ! orbital transformation settings
+        MINIMIZER CG
+        PRECONDITIONER Full_single_inverse
+      &END OT
+      &OUTER_SCF On
+        EPS_SCF 1.0E-1
+        MAX_SCF 5
+      &END OUTER_SCF
+      &PRINT
+        &RESTART
+          ADD_LAST Numeric
+          &EACH
+            GEO_OPT 1
+            MD ${pfreq}
+            QS_SCF 0
+          &END EACH
+        &END RESTART
+      &END PRINT
+    &END SCF
+    &XC  ! exchange and correlation functionals
+      &XC_FUNCTIONAL HCTH120
+        &HCTH T
+          PARAMETER_SET 120
+        &END HCTH
+      &END XC_FUNCTIONAL
+    &END XC
+  &END DFT
+  &SUBSYS
+    &CELL
+      ABC [angstrom] 6.0 6.0 6.0
+      ALPHA_BETA_GAMMA 90.0 90.0 90.0
+      PERIODIC xyz
+    &END CELL
+    &COLVAR
+      &HBP
+        ATOMS 4 5 1
+        NPOINTS 1
+      &END HBP
+    &END COLVAR
+    &KIND O
+      BASIS_SET DZVP-GTH-PADE
+      POTENTIAL GTH-HCTH120-q6
+    &END KIND
+    &KIND H
+      BASIS_SET DZVP-GTH-PADE
+      POTENTIAL GTH-HCTH120-q1
+    &END KIND
+    &TOPOLOGY
+      CONNECTIVITY MOL_SET
+      COORD_FILE_FORMAT xyz
+      COORD_FILE_NAME dimer.xyz
+      &CENTER_COORDINATES off
+      &END CENTER_COORDINATES
+      &MOL_SET
+        &MOLECULE
+          CONN_FILE_NAME topology_atoms.psf
+          NMOL 1
+        &END MOLECULE
+      &END MOL_SET
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL
+
+&MOTION
+  &FREE_ENERGY Metadyn
+    &METADYN
+      LAGRANGE true
+      LANGEVIN true
+      TAMCSTEPS ${Nz}
+      TEMPERATURE ${Tz}
+      TEMP_TOL 2000.0
+      TIMESTEP ${dtz}
+      &EXT_LAGRANGE_SS0
+        0.44025202
+      &END EXT_LAGRANGE_SS0
+      &METAVAR
+        COLVAR 1
+        GAMMA ${zgamma}
+        LAMBDA ${zk}
+        MASS ${zmass}
+        SCALE 1.0
+      &END METAVAR
+      &PRINT
+        &COLVAR
+          &EACH
+            MD 1
+          &END EACH
+        &END COLVAR
+      &END PRINT
+    &END METADYN
+  &END FREE_ENERGY
+  &GEO_OPT
+    MAX_DR 3.0e-3
+    MAX_FORCE 4.5e-4
+    MAX_ITER 1000
+    OPTIMIZER LBFGS
+  &END GEO_OPT
+  &MC
+    ENSEMBLE Traditional
+    IPRINT 1
+    NSTEP ${M}
+    RANDOMTOSKIP 0
+  &END MC
+  &MD
+    ENSEMBLE NVE
+    STEPS ${N}
+    TEMPERATURE ${Temp}
+    TIMESTEP ${dt}
+    TIME_START_VAL 0.0
+    &THERMOSTAT
+      &NOSE
+        LENGTH 3
+        MTS 2
+        TIMECON 1000.0
+        YOSHIDA 3
+      &END NOSE
+    &END THERMOSTAT
+  &END MD
+  &PRINT
+    &TRAJECTORY
+      FILENAME trajectory.xyz
+      FORMAT xyz
+      &EACH
+        MD 10
+      &END EACH
+    &END TRAJECTORY
+    &VELOCITIES
+      FILENAME velocity.xyz
+      FORMAT xyz
+      &EACH
+        MD 10
+      &END EACH
+    &END VELOCITIES
+  &END PRINT
+&END MOTION

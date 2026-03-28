@@ -1,0 +1,87 @@
+&GLOBAL
+  IOLEVEL LOW
+  PROJECT acn-2
+  RUN_TYPE ENERGY_FORCE
+&END GLOBAL
+
+&MOTION
+  &MD
+    ENSEMBLE NPT_I
+    STEPS 5
+    TEMPERATURE 300
+    TIMESTEP 0.5
+    &BAROSTAT
+      PRESSURE 0.
+      TIMECON 1000
+    &END BAROSTAT
+    &THERMOSTAT
+      &NOSE
+        LENGTH 3
+        MTS 2
+        TIMECON 1000
+        YOSHIDA 3
+      &END NOSE
+    &END THERMOSTAT
+  &END MD
+&END MOTION
+
+&FORCE_EVAL
+  METHOD FIST
+  &MM
+    &FORCEFIELD
+      PARMTYPE CHM
+      PARM_FILE_NAME ../sample_pot/acn.pot
+      &CHARGE
+        ATOM CT
+        CHARGE -0.479
+      &END CHARGE
+      &CHARGE
+        ATOM YC
+        CHARGE 0.481
+      &END CHARGE
+      &CHARGE
+        ATOM YN
+        CHARGE -0.532
+      &END CHARGE
+      &CHARGE
+        ATOM HC
+        CHARGE 0.177
+      &END CHARGE
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        ALPHA .44
+        EWALD_TYPE SPME
+        GMAX 32
+        O_SPLINE 6
+      &END EWALD
+    &END POISSON
+    &PRINT
+      &FF_INFO
+        SPLINE_DATA
+      &END FF_INFO
+    &END PRINT
+  &END MM
+  &PRINT
+    &FORCES
+    &END FORCES
+  &END PRINT
+  &SUBSYS
+    &CELL
+      ABC 27.0 27.0 27.0
+    &END CELL
+    &TOPOLOGY
+      CONNECTIVITY GENERATE
+      COORDINATE pdb
+      COORD_FILE_NAME ../sample_pdb/acn.pdb
+      MOL_CHECK
+      &DUMP_PDB
+      &END DUMP_PDB
+      &DUMP_PSF
+      &END DUMP_PSF
+      &GENERATE
+        BONDPARM_FACTOR 1.31
+      &END GENERATE
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

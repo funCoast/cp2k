@@ -1,0 +1,77 @@
+&GLOBAL
+  PRINT_LEVEL MEDIUM
+  PROJECT Ne-hybrid-rcam-b3lyp
+  RUN_TYPE ENERGY
+&END GLOBAL
+
+&FORCE_EVAL
+  METHOD Quickstep
+  &DFT
+    BASIS_SET_FILE_NAME EMSL_BASIS_SETS
+    POTENTIAL_FILE_NAME POTENTIAL
+    &MGRID
+      CUTOFF 200
+      REL_CUTOFF 50
+    &END MGRID
+    &QS
+      METHOD GAPW
+    &END QS
+    &SCF
+      EPS_SCF 1.0E-6
+      IGNORE_CONVERGENCE_FAILURE
+      MAX_SCF 1
+      SCF_GUESS ATOMIC
+      &OT on
+        PRECONDITIONER FULL_ALL
+      &END OT
+    &END SCF
+    &XC
+      DENSITY_CUTOFF 1.0E-9
+      GRADIENT_CUTOFF 1.0E-9
+      &HF
+        &INTERACTION_POTENTIAL
+          ! should be cell L/2 but large enough for the erf to decay
+          CUTOFF_RADIUS 2.5
+          OMEGA 0.33
+          POTENTIAL_TYPE MIX_CL_TRUNC
+          SCALE_COULOMB 0.18352
+          SCALE_LONGRANGE 0.94979
+          T_C_G_DATA t_c_g.dat
+        &END INTERACTION_POTENTIAL
+        &MEMORY
+          MAX_MEMORY 100
+        &END MEMORY
+        &SCREENING
+          EPS_SCHWARZ 1.0E-7
+        &END SCREENING
+      &END HF
+      &XC_FUNCTIONAL
+        &BECKE88
+          SCALE_X 0.95238
+        &END BECKE88
+        &BECKE88_LR
+          OMEGA 0.33
+          SCALE_X -0.94979
+        &END BECKE88_LR
+        &LYP
+          SCALE_C 1.0
+        &END LYP
+        &XALPHA
+          SCALE_X -0.13590
+        &END XALPHA
+      &END XC_FUNCTIONAL
+    &END XC
+  &END DFT
+  &SUBSYS
+    &CELL
+      ABC 6 6 6
+    &END CELL
+    &COORD
+      Ne   0.0   0.0   0.0
+    &END COORD
+    &KIND Ne
+      BASIS_SET 6-31Gxx
+      POTENTIAL ALL
+    &END KIND
+  &END SUBSYS
+&END FORCE_EVAL

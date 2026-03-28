@@ -1,0 +1,6 @@
+[submodule "thirdparty/libxsmm"]
+	path = thirdparty/libxsmm
+	url = https://github.com/funCoast/libxsmm.git
+[submodule "thirdparty/OpenBLAS"]
+	path = thirdparty/OpenBLAS
+	url = https://github.com/funCoast/OpenBLAS.git

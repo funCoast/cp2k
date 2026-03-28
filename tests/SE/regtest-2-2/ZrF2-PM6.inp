@@ -1,0 +1,55 @@
+&GLOBAL
+  PRINT_LEVEL LOW
+  PROJECT ZrF2-PM6
+  RUN_TYPE ENERGY_FORCE
+&END GLOBAL
+
+&FORCE_EVAL
+  METHOD Quickstep
+  &DFT
+    MULTIP 3
+    ROKS
+    &QS
+      METHOD PM6
+      &SE
+      &END SE
+    &END QS
+    &SCF
+      EPS_SCF 1.0E-6
+      IGNORE_CONVERGENCE_FAILURE
+      MAX_SCF 10
+      SCF_GUESS mopac
+      &MIXING
+        ALPHA 0.1
+        METHOD DIRECT_P_MIXING
+      &END MIXING
+      &OT
+        LINESEARCH 3PNT
+        MINIMIZER CG
+        PRECONDITIONER FULL_SINGLE_INVERSE
+        ROTATION
+      &END OT
+      &OUTER_SCF
+        EPS_SCF 1.0E-6
+        MAX_SCF 2
+      &END OUTER_SCF
+    &END SCF
+  &END DFT
+  &SUBSYS
+    &CELL
+      ABC 10.0 10.0 10.0
+      PERIODIC NONE
+    &END CELL
+    &COORD
+      F     0.000000     0.000000     0.000000
+      Zr     0.000000     0.000000     1.935824
+      F     1.757762     0.000000     2.746804
+    &END COORD
+    &PRINT
+      &KINDS
+        BASIS_SET
+        POTENTIAL
+      &END KINDS
+    &END PRINT
+  &END SUBSYS
+&END FORCE_EVAL

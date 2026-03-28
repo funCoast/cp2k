@@ -1,0 +1,62 @@
+&GLOBAL
+  PRINT_LEVEL LOW
+  PROJECT H2O-B3LYP-full-restart
+  RUN_TYPE ENERGY
+&END GLOBAL
+
+&FORCE_EVAL
+  &DFT
+    AUTO_BASIS RI_XAS MEDIUM
+    BASIS_SET_FILE_NAME EMSL_BASIS_SETS
+    POTENTIAL_FILE_NAME POTENTIAL
+    &POISSON
+      PERIODIC NONE
+      PSOLVER MT
+    &END POISSON
+    &QS
+      METHOD GAPW
+    &END QS
+    &SCF
+      IGNORE_CONVERGENCE_FAILURE
+      MAX_SCF 1
+    &END SCF
+    &XAS_TDP
+      RESTART_FROM_FILE H2O-B3LYP-full-xasat1_1s_singlet.rst
+      &PRINT
+        &CUBES
+          CUBES_LIST 1
+        &END CUBES
+        &PDOS
+          COMPONENTS
+        &END PDOS
+      &END PRINT
+    &END XAS_TDP
+    &XC
+      &XC_FUNCTIONAL LDA
+      &END XC_FUNCTIONAL
+    &END XC
+  &END DFT
+  &SUBSYS
+    &CELL
+      ABC 5.0 5.0 5.0
+      PERIODIC NONE
+    &END CELL
+    &COORD
+      O          0.00000        0.00000        0.11779
+      H          0.00000        0.75545       -0.47116
+      H          0.00000       -0.75545       -0.47116
+    &END COORD
+    &KIND O
+      BASIS_SET Ahlrichs-def2-SVP
+      POTENTIAL ALL
+    &END KIND
+    &KIND H
+      BASIS_SET Ahlrichs-def2-SVP
+      POTENTIAL ALL
+    &END KIND
+    &TOPOLOGY
+      &CENTER_COORDINATES
+      &END CENTER_COORDINATES
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

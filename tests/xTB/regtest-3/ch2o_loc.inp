@@ -1,0 +1,59 @@
+&GLOBAL
+  PRINT_LEVEL LOW
+  PROJECT CH2O
+  RUN_TYPE ENERGY
+&END GLOBAL
+
+&FORCE_EVAL
+  &DFT
+    &LOCALIZE
+      &PRINT
+        &MOLECULAR_DIPOLES
+        &END MOLECULAR_DIPOLES
+        &MOLECULAR_STATES
+        &END MOLECULAR_STATES
+        &TOTAL_DIPOLE
+        &END TOTAL_DIPOLE
+        &WANNIER_CENTERS
+          IONS+CENTERS T
+        &END WANNIER_CENTERS
+        &WANNIER_CUBES
+        &END WANNIER_CUBES
+        &WANNIER_SPREADS
+        &END WANNIER_SPREADS
+        &WANNIER_STATES
+        &END WANNIER_STATES
+      &END PRINT
+    &END LOCALIZE
+    &MGRID
+      CUTOFF 100
+    &END MGRID
+    &QS
+      METHOD xTB
+    &END QS
+    &SCF
+      EPS_SCF 1.e-7
+      MAX_SCF 100
+      SCF_GUESS MOPAC
+      &OT
+        MINIMIZER DIIS
+        PRECONDITIONER FULL_ALL
+      &END OT
+    &END SCF
+  &END DFT
+  &SUBSYS
+    &CELL
+      ABC 6.0 6.0 6.0
+      PERIODIC NONE
+    &END CELL
+    &COORD
+      O     0.051368    0.000000    0.000000     M1
+      C     1.278612    0.000000    0.000000     M1
+      H     1.870460    0.939607    0.000000     M1
+      H     1.870460   -0.939607    0.000000     M1
+      O     0.000000    0.000000    2.000000     M2
+      H     0.600000    0.900000    2.000000     M2
+      H     0.600000   -0.900000    2.000000     M2
+    &END COORD
+  &END SUBSYS
+&END FORCE_EVAL

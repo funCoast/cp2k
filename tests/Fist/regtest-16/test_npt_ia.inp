@@ -1,0 +1,108 @@
+&GLOBAL
+  PROJECT md_npt_ia
+  RUN_TYPE md
+  &PRINT DEBUG
+  &END PRINT
+&END GLOBAL
+
+&MOTION
+  &CONSTRAINT
+    &FIXED_ATOMS
+      MOLNAME u
+    &END FIXED_ATOMS
+    &G3X3
+      ATOMS 1 2 3
+      DISTANCES 1.808845716 1.808845716 2.860856174
+      MOLNAME WAT  !To be specified in the coord.inc file
+    &END G3X3
+  &END CONSTRAINT
+  &MD
+    ENSEMBLE NPT_IA
+    STEPS 3
+    TEMPERATURE 298
+    TIMESTEP 1
+    &BAROSTAT
+      PRESSURE 1
+    &END BAROSTAT
+    &THERMOSTAT
+      REGION GLOBAL
+      TYPE CSVR
+      &CSVR
+        TIMECON 9.9999999999999986E+01
+      &END CSVR
+    &END THERMOSTAT
+  &END MD
+  &PRINT
+    &STRUCTURE_DATA Low
+      POSITION 1
+    &END STRUCTURE_DATA
+    &TRAJECTORY
+      &EACH
+        MD 1
+      &END EACH
+    &END TRAJECTORY
+  &END PRINT
+&END MOTION
+
+&FORCE_EVAL
+  METHOD FIST
+  STRESS_TENSOR Analytical
+  &MM
+    &FORCEFIELD
+      IGNORE_MISSING_CRITICAL_PARAMS T
+      MULTIPLE_POTENTIAL .TRUE.
+      &CHARGE
+        ATOM H
+        CHARGE 0.5190
+      &END CHARGE
+      &CHARGE
+        ATOM O
+        CHARGE -1.038
+      &END CHARGE
+      &NONBONDED
+        &LENNARD-JONES
+          ATOMS O O
+          EPSILON [kcalmol] 0.1825
+          RCUT 10
+          SIGMA [nm] 3.234E-01
+        &END LENNARD-JONES
+        &LENNARD-JONES
+          ATOMS Au O
+          EPSILON [kcalmol] 0.1825
+          RCUT 10
+          SIGMA [nm] 3.234E-01
+        &END LENNARD-JONES
+        &LENNARD-JONES
+          ATOMS Au H
+          EPSILON [kcalmol] 0.1825
+          RCUT 10
+          SIGMA [nm] 3.234E-01
+        &END LENNARD-JONES
+      &END NONBONDED
+      &SPLINE
+        EMAX_SPLINE 10
+      &END SPLINE
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        EWALD_TYPE spme
+        GMAX 36 36 36  !About box size
+      &END EWALD
+    &END POISSON
+  &END MM
+  &SUBSYS
+    &CELL
+      ABC 32.419 32.862 31.318  !Change
+      ALPHA_BETA_GAMMA 90 90 90  !Change
+      PERIODIC XYZ
+    &END CELL
+    &COORD
+      @INCLUDE "coord-npt_ia.inc"
+    &END COORD
+    &TOPOLOGY
+      &GENERATE
+        BONDPARM_FACTOR 0.1
+      &END GENERATE
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

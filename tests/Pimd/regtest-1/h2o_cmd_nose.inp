@@ -1,0 +1,59 @@
+&GLOBAL
+  PRINT_LEVEL LOW
+  PROJECT_NAME h2o_cmd_nose
+  RUN_TYPE PINT
+&END GLOBAL
+
+&MOTION
+  &PINT
+    DT 0.5
+    NRESPA 2
+    NUM_STEPS 40
+    P 10
+    PROC_PER_REPLICA 1
+    PROPAGATOR CMD
+    TEMP 50.0
+    TRANSFORMATION NORMAL
+    &NORMALMODE
+      GAMMA 8
+    &END NORMALMODE
+    &NOSE
+      NNOS 3
+    &END NOSE
+  &END PINT
+&END MOTION
+
+&FORCE_EVAL
+  METHOD FIST
+  &MM
+    &FORCEFIELD
+      PARMTYPE CHM
+      PARM_FILE_NAME ../../Fist/sample_pot/water.pot
+      &CHARGE
+        ATOM OT
+        CHARGE -0.8476
+      &END CHARGE
+      &CHARGE
+        ATOM HT
+        CHARGE 0.4238
+      &END CHARGE
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        ALPHA 0.44
+        EWALD_TYPE SPME
+        GMAX 24
+        O_SPLINE 6
+      &END EWALD
+    &END POISSON
+  &END MM
+  &SUBSYS
+    &CELL
+      ABC 24.955 24.955 24.955
+    &END CELL
+    &TOPOLOGY
+      COORD_FILE_FORMAT PDB
+      COORD_FILE_NAME ../../Fist/sample_pdb/water_1.pdb
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

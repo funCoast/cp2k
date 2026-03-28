@@ -1,0 +1,149 @@
+# Spack environment file for a MPI parallel CP2K binary with all available dependencies
+
+spack:
+  concretizer:
+    unify: true
+  config:
+    install_tree:
+      root: /opt/spack
+  packages:
+    all:
+      buildable: true
+      prefer:
+        - ~cuda
+        - +mpi
+        - +openmp
+        - +pic
+        - ~rocm
+      require: target=""
+    mpi:
+      require:
+        - mpich
+    mpich:
+      require:
+        - ~xpmem
+    openmpi:
+      require:
+        - +internal-hwloc
+    xpmem:
+      require:
+       - spec: xpmem@master ~kernel-module
+    blas:
+      require:
+        - openblas
+    lapack:
+      require:
+        - openblas
+    openblas:
+      require:
+        - +fortran
+        - threads=openmp
+    scalapack:
+      require:
+        - netlib-scalapack
+    # Dependencies for CP2K
+    cosma:
+      require:
+        - +scalapack
+    dbcsr:
+      require:
+        - ~examples
+        - +openmp
+        - smm=blas
+    deepmdkit:
+      require:
+        - +enable_pytorch
+        - build_system=cmake
+    dftd4:
+      require:
+        - build_system=cmake
+    dla-future:
+      require:
+        - +scalapack
+    elpa:
+      require:
+        - +openmp
+    fftw:
+      require:
+        - +openmp
+    hdf5:
+      require:
+        - +fortran
+    libint:
+      require:
+        - +fortran
+        - tune=cp2k-lmax-5
+    libxc:
+      require:
+        - +kxc
+        - build_system=cmake
+    pexsi:
+      require:
+        - +fortran
+    py-torch:
+      require:
+        - ~cuda
+        - ~distributed
+        - ~kineto
+        - ~mkldnn
+        - ~rocm
+        - ~valgrind
+    sirius:
+      require:
+        - +fortran
+        - +pugixml
+        - ~apps
+        - +vdwxc
+    spla:
+      require:
+        - +fortran
+    tblite:
+      require:
+        - build_system=cmake
+    trexio:
+      require:
+        - +hdf5
+        - build_system=cmake
+  specs:
+    # Minimal
+    - "dbcsr@2.9.1"
+    - "libfabric@1.22.0"
+    - "mpich@4.3.2"
+    - "netlib-scalapack@2.2.2"
+    - "openblas@0.3.30"
+#   - "openmpi@5.0.8"
+    # All
+    - "cosma@2.7.0"
+    - "deepmdkit@3.1.2"
+    - "dftd4@3.7.0"
+    - "dla-future@0.10.0"
+    - "dla-future-fortran@0.5.0"
+    - "elpa@2025.06.001"
+    - "fftw@3.3.10"
+    - "greenx@2.2"
+    - "hdf5@1.14.6"
+    - "lammps-user-pace@2025.12.4"
+    - "libint@2.11.1"
+    - "libsmeagol@1.2"
+    - "libvdwxc@0.4.0:"
+    - "libvori@220621"
+    - "libxc@7.0.0"
+#   - "libxsmm@1.17"
+    - "mimic-mcl@3.0.0"
+    - "pexsi@2.0.0"
+    - "plumed@2.9.2"
+    - "py-torch@2.9.0"
+    - "sirius@7.9.0"
+    - "spfft@1.1.1"
+    - "spglib@2.5.0"
+    - "spla@1.6.1"
+#   - "tblite@0.5.0" CMake build error for mctc-lib: target OpenMP::OpenMP_Fortran not found
+    - "trexio@2.5.0"
+  view:
+    default:
+      root: /opt/spack/view
+      exclude:
+        # Exclude gcc-runtime to avoid adding a copy of libgomp.so to the view
+        - gcc-runtime
+
+# EOF

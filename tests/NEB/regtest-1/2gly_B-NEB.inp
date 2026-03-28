@@ -1,0 +1,102 @@
+&GLOBAL
+  PRINT_LEVEL LOW
+  PROJECT 2gly_B-NEB
+  RUN_TYPE BAND
+&END GLOBAL
+
+&MOTION
+  &BAND
+    BAND_TYPE B-NEB
+    K_SPRING 0.05
+    NPROC_REP 1
+    NUMBER_OF_REPLICA 5
+    ROTATE_FRAMES T
+    &CONVERGENCE_CONTROL
+      #MAX_DR 0.01
+      MAX_FORCE 0.001
+      #RMS_DR 0.02
+      RMS_FORCE 0.0005
+    &END CONVERGENCE_CONTROL
+    &CONVERGENCE_INFO
+    &END CONVERGENCE_INFO
+    &OPTIMIZE_BAND
+      OPT_TYPE MD
+      &MD
+        MAX_STEPS 20
+        TEMPERATURE 100.0
+        TIMESTEP 0.5
+        &VEL_CONTROL
+          ANNEALING 0.95
+          PROJ_VELOCITY_VERLET T
+        &END VEL_CONTROL
+        #&TEMP_CONTROL
+        #  TEMPeRATURE 100.0
+        #  TEMP_TOL 50.
+        #  TEMP_TOL_STEPS 100
+        #&END
+      &END MD
+    &END OPTIMIZE_BAND
+    &PROGRAM_RUN_INFO
+    &END PROGRAM_RUN_INFO
+    &REPLICA
+      COORD_FILE_NAME ../amber/MOL.0.xyz
+    &END REPLICA
+    &REPLICA
+      COORD_FILE_NAME ../amber/MOL.1.xyz
+    &END REPLICA
+    &REPLICA
+      COORD_FILE_NAME ../amber/MOL.2.xyz
+    &END REPLICA
+    &REPLICA
+      COORD_FILE_NAME ../amber/MOL.3.xyz
+    &END REPLICA
+    &REPLICA
+      COORD_FILE_NAME ../amber/MOL.4.xyz
+    &END REPLICA
+  &END BAND
+  &PRINT
+    &VELOCITIES OFF
+    &END VELOCITIES
+  &END PRINT
+&END MOTION
+
+&FORCE_EVAL
+  METHOD FIST
+  &MM
+    &FORCEFIELD
+      PARMTYPE CHM
+      PARM_FILE_NAME ../amber/mol.pot
+      &SPLINE
+        EMAX_ACCURACY 500.0
+        EMAX_SPLINE 1.0E10
+        EPS_SPLINE 1.0E-6
+        R0_NB [bohr] 0.0001
+        RCUT_NB 20.0
+      &END SPLINE
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        ALPHA .36
+        EWALD_TYPE ewald
+        GMAX 29
+      &END EWALD
+    &END POISSON
+    &PRINT
+      &FF_INFO
+        SPLINE_INFO
+      &END FF_INFO
+    &END PRINT
+  &END MM
+  &SUBSYS
+    &CELL
+      ABC 30.0 30.0 30.0
+    &END CELL
+    &TOPOLOGY
+      CHARGE_BETA
+      CONNECTIVITY UPSF
+      CONN_FILE_NAME ../amber/mol.psf
+      COORDINATE PDB
+      COORD_FILE_NAME ../amber/mol.pdb
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

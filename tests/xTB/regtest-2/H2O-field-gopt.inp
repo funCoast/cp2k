@@ -1,0 +1,58 @@
+&GLOBAL
+  PRINT_LEVEL MEDIUM
+  PROJECT H2O-field-gopt
+  RUN_TYPE GEO_OPT
+&END GLOBAL
+
+&MOTION
+  &GEO_OPT
+    MAX_ITER 3
+  &END GEO_OPT
+&END MOTION
+
+&FORCE_EVAL
+  METHOD Quickstep
+  &DFT
+    &KPOINTS
+      SCHEME GAMMA
+    &END KPOINTS
+    &PERIODIC_EFIELD
+      INTENSITY 0.001
+      POLARISATION 1 0 0
+    &END PERIODIC_EFIELD
+    &POISSON
+      &EWALD
+        ALPHA 1.0
+        EWALD_TYPE SPME
+        GMAX 75
+      &END EWALD
+    &END POISSON
+    &PRINT
+      &MOMENTS
+        PERIODIC T
+      &END MOMENTS
+    &END PRINT
+    &QS
+      EPS_DEFAULT 1.0E-12
+      METHOD xTB
+      &XTB
+        DO_EWALD T
+      &END XTB
+    &END QS
+    &SCF
+      EPS_SCF 1.0E-6
+      MAX_SCF 60
+      SCF_GUESS ATOMIC
+    &END SCF
+  &END DFT
+  &SUBSYS
+    &CELL
+      ABC 6.0 6.0 6.0
+    &END CELL
+    &COORD
+      O   0.000000    0.000000   -0.065587 H2O
+      H   0.000000   -0.757136    0.520545 H2O
+      H   0.000000    0.757136    0.520545 H2O
+    &END COORD
+  &END SUBSYS
+&END FORCE_EVAL

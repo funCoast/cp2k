@@ -1,0 +1,93 @@
+&GLOBAL
+  PROJECT IPBV
+  RUN_TYPE MD
+&END GLOBAL
+
+&MOTION
+  &CONSTRAINT
+    &G3X3
+      ATOMS 1 2 3
+      DISTANCES 1.87366 1.87366 2.982877
+      MOLECULE 1
+    &END G3X3
+  &END CONSTRAINT
+  &MD
+    ENSEMBLE NPT_I
+    STEPS 3000
+    TEMPERATURE 298
+    TIMESTEP 2.5
+    &BAROSTAT
+      PRESSURE 0.
+      TIMECON 1000
+    &END BAROSTAT
+    &THERMOSTAT
+      REGION MOLECULE
+      &NOSE
+        LENGTH 3
+        MTS 2
+        TIMECON 1000
+        YOSHIDA 3
+      &END NOSE
+    &END THERMOSTAT
+  &END MD
+&END MOTION
+
+&FORCE_EVAL
+  METHOD FIST
+  STRESS_TENSOR ANALYTICAL
+  &MM
+    &FORCEFIELD
+      &BEND
+        ATOMS H O H
+        K 0.
+        THETA0 1.8
+      &END BEND
+      &BOND
+        ATOMS O H
+        K 0.0
+        R0 0.0
+      &END BOND
+      &CHARGE
+        ATOM O
+        CHARGE -0.7699784
+      &END CHARGE
+      &CHARGE
+        ATOM H
+        CHARGE 0.3849892
+      &END CHARGE
+      &NONBONDED
+        &IPBV
+          ATOMS O O
+          RCUT 7.8
+        &END IPBV
+        &IPBV
+          ATOMS H O
+          RCUT 7.8
+        &END IPBV
+        &IPBV
+          ATOMS H H
+          RCUT 7.8
+        &END IPBV
+      &END NONBONDED
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        ALPHA .44
+        EWALD_TYPE spme
+        GMAX 25
+        O_SPLINE 4
+      &END EWALD
+    &END POISSON
+  &END MM
+  &SUBSYS
+    &CELL
+      ABC 24.955 24.955 24.955
+    &END CELL
+    &TOPOLOGY
+      CONNECTIVITY UPSF
+      CONN_FILE_NAME sample_psf/ipbv.psf
+      COORDINATE pdb
+      COORD_FILE_NAME sample_pdb/ipbv.pdb
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

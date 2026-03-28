@@ -1,0 +1,64 @@
+&GLOBAL
+  PRINT_LEVEL LOW
+  PROJECT wat125
+  RUN_TYPE MD
+&END GLOBAL
+
+&MOTION
+  &MD
+    ENSEMBLE NVE
+    STEPS 10
+    TEMPERATURE 298
+    TIMESTEP 1.0
+  &END MD
+&END MOTION
+
+&FORCE_EVAL
+  METHOD FIST
+  &MM
+    &FORCEFIELD
+      PARMTYPE CHM
+      PARM_FILE_NAME ../sample_pot/wat125.pot
+      &CHARGE
+        ATOM 62
+        CHARGE -0.8476
+      &END CHARGE
+      &CHARGE
+        ATOM 3
+        CHARGE 0.4238
+      &END CHARGE
+      &SPLINE
+        EMAX_SPLINE 1.0
+      &END SPLINE
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        ALPHA .44
+        EWALD_TYPE spme
+        GMAX 30
+        O_SPLINE 6
+      &END EWALD
+    &END POISSON
+  &END MM
+  &SUBSYS
+    &CELL
+      ABC 15.0 15.0 15.0
+    &END CELL
+    &KIND 62
+      ELEMENT O
+    &END KIND
+    &KIND 3
+      ELEMENT H
+    &END KIND
+    &TOPOLOGY
+      CONNECTIVITY PSF
+      CONN_FILE_NAME ../sample_psf/wat125.psf
+      COORDINATE XYZ
+      COORD_FILE_NAME ../sample_xyz/wat125.xyz
+      &DUMP_PDB
+      &END DUMP_PDB
+      &DUMP_PSF
+      &END DUMP_PSF
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

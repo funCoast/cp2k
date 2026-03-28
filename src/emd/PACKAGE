@@ -1,0 +1,19 @@
+{
+    "description": "Methods for Ehrenfest molecular dynamics",
+    "requires": [
+        "../",
+        "../common",
+        "../base",
+        "../input",
+        "../subsys",
+        "../aobasis",
+        "../mpiwrap",
+        "../fm",
+        "../pw",
+        "../pw_env",
+        "../pw/fft",
+        "../arnoldi",
+        "../dbx",
+        "../dbt",
+    ],
+}

@@ -1,0 +1,50 @@
+&GLOBAL
+  PRINT_LEVEL LOW
+  PROJECT Hg_dicat2
+  RUN_TYPE ENERGY_FORCE
+&END GLOBAL
+
+&FORCE_EVAL
+  METHOD Quickstep
+  &DFT
+    CHARGE 2
+    &QS
+      METHOD PM6
+      &SE
+      &END SE
+    &END QS
+    &SCF
+      EPS_SCF 1.0E-6
+      MAX_SCF 50
+      SCF_GUESS mopac
+      &MIXING
+        ALPHA 0.1
+        METHOD DIRECT_P_MIXING
+      &END MIXING
+      &OT
+        MINIMIZER DIIS
+        PRECONDITIONER NONE
+      &END OT
+      &OUTER_SCF
+        EPS_SCF 1.0E-6
+        MAX_SCF 5
+      &END OUTER_SCF
+    &END SCF
+  &END DFT
+  &SUBSYS
+    &CELL
+      ABC 10.0 10.0 10.0
+      PERIODIC NONE
+    &END CELL
+    &COORD
+      Hg    0.000000     0.000000     0.000000
+    &END COORD
+    &PRINT
+      &KINDS
+        BASIS_SET
+        POTENTIAL
+        SE_PARAMETERS
+      &END KINDS
+    &END PRINT
+  &END SUBSYS
+&END FORCE_EVAL

@@ -1,0 +1,5 @@
+CompileFlags:
+  CompilationDatabase: out/build/llvm
+  Add:
+    - "-march=armv8-a+sme2+sve+sme-f64f64"
+    - "-std=c++20"

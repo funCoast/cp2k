@@ -1,0 +1,70 @@
+&GLOBAL
+  !  TRACE
+  PRINT_LEVEL MEDIUM
+  PROJECT NE-hybrid-HSE06-lda
+  RUN_TYPE ENERGY
+&END GLOBAL
+
+&FORCE_EVAL
+  METHOD Quickstep
+  &DFT
+    BASIS_SET_FILE_NAME EMSL_BASIS_SETS
+    POTENTIAL_FILE_NAME POTENTIAL
+    &MGRID
+      CUTOFF 200
+      REL_CUTOFF 50
+    &END MGRID
+    &QS
+      EPS_DEFAULT 1.0E-12
+      METHOD GAPW
+    &END QS
+    &SCF
+      EPS_SCF 1.0E-6
+      MAX_SCF 15
+      SCF_GUESS ATOMIC
+    &END SCF
+    &XC
+      &HF
+        FRACTION 0.25
+        &INTERACTION_POTENTIAL
+          OMEGA 0.11
+          POTENTIAL_TYPE SHORTRANGE
+        &END INTERACTION_POTENTIAL
+        &MEMORY
+          MAX_MEMORY 10
+        &END MEMORY
+        &SCREENING
+          EPS_SCHWARZ 1.0E-3
+        &END SCREENING
+      &END HF
+      &XC_FUNCTIONAL
+        &PBE
+          SCALE_C 1.0
+          SCALE_X 0.0
+        &END PBE
+        &XWPBE
+          OMEGA 0.11
+          SCALE_X -0.25
+          SCALE_X0 1.0
+        &END XWPBE
+      &END XC_FUNCTIONAL
+    &END XC
+  &END DFT
+  &SUBSYS
+    &CELL
+      ABC 6.0 6.0 12.0
+    &END CELL
+    &COORD
+      Ne   0.000000    0.000000    0.000000
+      Ne   0.000000    0.000000    2.000000
+      Ne   0.000000    0.000000    4.000000
+      Ne   0.000000    0.000000    6.000000
+      Ne   0.000000    0.000000    8.000000
+      Ne   0.000000    0.000000    10.000000
+    &END COORD
+    &KIND Ne
+      BASIS_SET 6-31Gxx
+      POTENTIAL ALL
+    &END KIND
+  &END SUBSYS
+&END FORCE_EVAL

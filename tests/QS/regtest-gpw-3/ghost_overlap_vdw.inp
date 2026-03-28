@@ -1,0 +1,77 @@
+&GLOBAL
+  PRINT_LEVEL LOW
+  PROJECT ghost_overlap_vdw
+  RUN_TYPE ENERGY
+&END GLOBAL
+
+&FORCE_EVAL
+  METHOD Quickstep
+  &DFT
+    BASIS_SET_FILE_NAME BASIS_SET
+    POTENTIAL_FILE_NAME POTENTIAL
+    &MGRID
+      CUTOFF 200
+    &END MGRID
+    &QS
+      EPS_DEFAULT 1.0E-8
+    &END QS
+    &SCF
+      IGNORE_CONVERGENCE_FAILURE
+      MAX_SCF 3
+      SCF_GUESS ATOMIC
+    &END SCF
+    &XC
+      &VDW_POTENTIAL
+        DISPERSION_FUNCTIONAL PAIR_POTENTIAL
+        &PAIR_POTENTIAL
+          SCALING 1.0e0
+          TYPE DFTD2
+        &END PAIR_POTENTIAL
+      &END VDW_POTENTIAL
+      &XC_FUNCTIONAL Pade
+      &END XC_FUNCTIONAL
+    &END XC
+  &END DFT
+  &SUBSYS
+    &CELL
+      ABC 10.0 10.0 10.0
+    &END CELL
+    &COORD
+      O     0.000000     0.000000     0.000000
+      H     0.000000     0.000000     1.000000
+      H     0.942809     0.000000    -0.333333
+      O_ghost     0.000000     0.000000     0.000000
+      H_ghost     0.000000     0.000000     1.000000
+      H_ghost     0.942809     0.000000    -0.333333
+    &END COORD
+    &KIND H_ghost
+      BASIS_SET SZV-GTH-PADE
+      GHOST
+    &END KIND
+    &KIND O_ghost
+      BASIS_SET SZV-GTH-PADE
+      GHOST
+    &END KIND
+    &KIND H
+      BASIS_SET DZVP-GTH-PBE
+      POTENTIAL GTH-PADE-q1
+    &END KIND
+    &KIND O
+      BASIS_SET DZVP-GTH-PBE
+      POTENTIAL GTH-PADE-q6
+    &END KIND
+    &PRINT
+      &INTERATOMIC_DISTANCES off
+        # Disable check of interatomic distances completely
+        CHECK_INTERATOMIC_DISTANCES 0.0
+      &END INTERATOMIC_DISTANCES
+    &END PRINT
+    #
+    # ghost atoms should be allowed to be at identical locations as other atoms
+    # furthermore, they should not have vdw interactions with other atoms
+    #
+    &TOPOLOGY
+      CONN_FILE_FORMAT OFF
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

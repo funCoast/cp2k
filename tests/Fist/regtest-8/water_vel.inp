@@ -1,0 +1,80 @@
+&GLOBAL
+  PRINT_LEVEL LOW
+  PROGRAM CP2K
+  PROJECT water_vel
+  RUN_TYPE md
+&END GLOBAL
+
+&MOTION
+  &MD
+    ENSEMBLE NVT
+    STEPS 100
+    TEMPERATURE 298
+    TIMESTEP 0.5
+    &THERMOSTAT
+      &NOSE
+        TIMECON 10
+      &END NOSE
+    &END THERMOSTAT
+  &END MD
+  &PRINT
+    &RESTART OFF
+    &END RESTART
+    &RESTART_HISTORY OFF
+    &END RESTART_HISTORY
+    &TRAJECTORY OFF
+    &END TRAJECTORY
+    &VELOCITIES OFF
+    &END VELOCITIES
+  &END PRINT
+&END MOTION
+
+&FORCE_EVAL
+  METHOD FIST
+  &MM
+    &FORCEFIELD
+      EI_SCALE14 0.5
+      PARMTYPE G96
+      PARM_FILE_NAME water.gtop
+      VDW_SCALE14 1.0
+      &SPLINE
+        RCUT_NB 7.0
+      &END SPLINE
+    &END FORCEFIELD
+    &POISSON
+      &EWALD
+        ALPHA .4
+        EWALD_TYPE spme
+        GMAX 27
+        O_SPLINE 4
+        #EWALD_TYPE PME
+        #ALPHA .4
+        #NS_MAX 25
+      &END EWALD
+    &END POISSON
+    &PRINT
+      #&FF_INFO
+      #  SPLINE_INFO
+      #&END
+    &END PRINT
+  &END MM
+  &SUBSYS
+    &CELL
+      ABC 20.0 20.0 20.0
+    &END CELL
+    &PRINT
+      &TOPOLOGY_INFO
+        #GTOP_INFO
+        #G96_INFO
+      &END TOPOLOGY_INFO
+    &END PRINT
+    &TOPOLOGY
+      CONNECTIVITY G96
+      CONN_FILE water.gtop
+      COORDINATE G96
+      COORD_FILE water_vel.g96
+      USE_G96_VELOCITY
+      #PARA_RES F
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

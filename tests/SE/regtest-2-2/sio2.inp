@@ -1,0 +1,72 @@
+&GLOBAL
+  PRINT_LEVEL LOW
+  PROJECT sio2
+  RUN_TYPE DEBUG
+&END GLOBAL
+
+&DEBUG
+&END DEBUG
+
+&FORCE_EVAL
+  METHOD Quickstep
+  &DFT
+    CHARGE 0
+    &QS
+      METHOD PM6
+      &SE
+        &COULOMB
+          CUTOFF [angstrom] 50.0
+          RC_RANGE [angstrom] 0.0
+        &END COULOMB
+        &EXCHANGE
+          CUTOFF [angstrom] 50.0
+          RC_RANGE [angstrom] 0.0
+        &END EXCHANGE
+      &END SE
+    &END QS
+    &SCF
+      EPS_SCF 1.0E-6
+      MAX_SCF 100
+      SCF_GUESS ATOMIC
+      &MIXING
+        ALPHA 0.1
+        METHOD DIRECT_P_MIXING
+      &END MIXING
+      &OT
+        MINIMIZER DIIS
+        PRECONDITIONER NONE
+      &END OT
+      &OUTER_SCF
+        EPS_SCF 1.0E-6
+        MAX_SCF 10
+      &END OUTER_SCF
+      &PRINT
+        &RESTART OFF
+        &END RESTART
+        &RESTART_HISTORY OFF
+        &END RESTART_HISTORY
+      &END PRINT
+    &END SCF
+  &END DFT
+  &SUBSYS
+    &CELL
+      ABC 50.0 50.0 50.0
+      PERIODIC NONE
+    &END CELL
+    &COORD
+      Si        0.00000        0.00000        0.00000
+      O        1.32660        0.02000        0.20000
+      O       -1.33660        0.00030        0.00000
+    &END COORD
+    &PRINT
+      &KINDS
+        BASIS_SET
+        POTENTIAL
+        SE_PARAMETERS
+      &END KINDS
+    &END PRINT
+    &TOPOLOGY
+      CONNECTIVITY OFF
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL

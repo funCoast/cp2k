@@ -1,0 +1,37 @@
+build
+gcc_build
+out
+*.o
+*.dSYM
+*.tgz
+*.dmg
+*.pyc
+*.tmp
+*.png
+*.svg
+*.csv
+*.pdf
+CMakeUserPresets.json
+.vscode
+
+# Third-party generated content
+thirdparty/_build/
+thirdparty/_downloads/
+thirdparty/_install/
+thirdparty/_staging/
+thirdparty/build/
+thirdparty/downloads/
+thirdparty/install/
+thirdparty/armpl/
+thirdparty/armpl-install/
+
+# Verify harness artifacts
+test/verify/artifacts/
+test/verify/*.o
+test/verify/verify
+test/verify/test.sh
+test/verify/kernel.s
+test/verify/kernel.cpp
+test/verify/shape.h
+
+test/verify_run*

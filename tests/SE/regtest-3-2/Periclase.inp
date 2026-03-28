@@ -1,0 +1,63 @@
+&GLOBAL
+  PRINT_LEVEL LOW
+  PROJECT Periclase
+  RUN_TYPE ENERGY_FORCE
+&END GLOBAL
+
+&FORCE_EVAL
+  METHOD Quickstep
+  &DFT
+    &QS
+      METHOD PM6
+      &SE
+        &COULOMB
+          CUTOFF [angstrom] 4.175
+        &END COULOMB
+      &END SE
+    &END QS
+    &SCF
+      EPS_SCF 1.0E-6
+      MAX_SCF 50
+      SCF_GUESS mopac
+      &OT
+        MINIMIZER DIIS
+        PRECONDITIONER FULL_SINGLE_INVERSE
+      &END OT
+      &OUTER_SCF
+        EPS_SCF 1.0E-6
+        MAX_SCF 5
+      &END OUTER_SCF
+    &END SCF
+  &END DFT
+  &PRINT
+    &FORCES
+    &END FORCES
+  &END PRINT
+  &SUBSYS
+    &CELL
+      # this is the wrong cell but it's just to test the parse of the CIF
+      ABC 4.175 4.175 4.175
+    &END CELL
+    &PRINT
+      &CELL
+        UNIT angstrom
+      &END CELL
+      &KINDS
+        BASIS_SET
+        POTENTIAL
+      &END KINDS
+      &TOPOLOGY_INFO
+        CIF_INFO
+      &END TOPOLOGY_INFO
+    &END PRINT
+    &TOPOLOGY
+      CONNECTIVITY OFF
+      COORDINATE CIF
+      COORD_FILE_NAME ../sample_cif/Periclase.cif
+      &DUMP_PDB
+      &END DUMP_PDB
+      &DUMP_PSF
+      &END DUMP_PSF
+    &END TOPOLOGY
+  &END SUBSYS
+&END FORCE_EVAL
