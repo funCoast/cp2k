@@ -30,6 +30,10 @@ case "$with_hdf5" in
     else
       if [ -f hdf5-${hdf5_ver}.tar.gz ]; then
         echo "hdf5-${hdf5_ver}.tar.gz is found"
+        if ! checksum "hdf5-${hdf5_ver}.tar.gz" "${hdf5_sha256}"; then
+          echo "hdf5-${hdf5_ver}.tar.gz is corrupted, re-downloading"
+          download_pkg_from_cp2k_org "${hdf5_sha256}" "hdf5-${hdf5_ver}.tar.gz"
+        fi
       else
         download_pkg_from_cp2k_org "${hdf5_sha256}" "hdf5-${hdf5_ver}.tar.gz"
       fi
