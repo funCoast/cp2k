@@ -26,6 +26,11 @@ cd "${BUILDDIR}"
 
 case "$with_libvdwxc" in
   __INSTALL__)
+    if [ "$(uname -s)" = "Darwin" ]; then
+      report_warning ${LINENO} "libvdwxc is not supported on Darwin with the current FFTW toolchain, skipping it"
+      exit 0
+    fi
+
     require_env FFTW3_INCLUDES
     require_env FFTW3_LIBS
 
@@ -49,11 +54,15 @@ case "$with_libvdwxc" in
       if [ "$(uname -s)" = "Darwin" ]; then
         LDFLAGS="${LDFLAGS} -ld_classic"
       fi
+      libvdwxc_cflags="${CFLAGS} -fpermissive"
+      if [ "$(uname -s)" = "Darwin" ]; then
+        libvdwxc_cflags="${libvdwxc_cflags//-fopenmp/}"
+      fi
 
       if [ "${MPI_MODE}" = "no" ]; then
         # compile libvdwxc without mpi support since fftw (or mkl) do not have mpi support activated
         ./configure \
-          CC="${CC}" CFLAGS="${CFLAGS} -fpermissive" \
+          CC="${CC}" CFLAGS="${libvdwxc_cflags}" \
           FC="${FC}" \
           FFTW3_INCLUDES="${FFTW3_INCLUDES}" \
           FFTW3_LIBS="$(resolve_string "${FFTW3_LIBS}" "MPI")" \
@@ -63,7 +72,7 @@ case "$with_libvdwxc" in
           > configure.log 2>&1 || tail -n ${LOG_LINES} configure.log
       else
         ./configure \
-          CC="${MPICC}" CFLAGS="${CFLAGS} -fpermissive" \
+          CC="${MPICC}" CFLAGS="${libvdwxc_cflags}" \
           FC="${MPIFC}" \
           FFTW3_INCLUDES="${FFTW3_INCLUDES}" \
           FFTW3_LIBS="$(resolve_string "${FFTW3_LIBS}" "MPI")" \

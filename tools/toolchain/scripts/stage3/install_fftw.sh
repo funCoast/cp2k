@@ -46,7 +46,9 @@ case "$with_fftw" in
       FFTW_FLAGS="--enable-openmp --disable-shared --enable-static"
       # fftw has mpi support but not compiled by default. so compile it if we build with mpi.
       # it will create a second library to link with if needed
-      [ "${MPI_MODE}" != "no" ] && FFTW_FLAGS="--enable-mpi ${FFTW_FLAGS}"
+      if [ "${MPI_MODE}" != "no" ] && [ "$(uname -s)" != "Darwin" ]; then
+        FFTW_FLAGS="--enable-mpi ${FFTW_FLAGS}"
+      fi
       if [ "${TARGET_CPU}" = "native" ]; then
         if [ -f /proc/cpuinfo ]; then
           grep '\bavx\b' /proc/cpuinfo 1> /dev/null && FFTW_FLAGS="${FFTW_FLAGS} --enable-avx"
@@ -88,8 +90,15 @@ case "$with_fftw" in
     ;;
 esac
 if [ "$with_fftw" != "__DONTUSE__" ]; then
-  [ "$MPI_MODE" != "no" ] && FFTW_LIBS="IF_MPI(-lfftw3_mpi|) "
-  FFTW_LIBS+="-lfftw3 -lfftw3_omp"
+  fftw_libs=""
+  if [ "$MPI_MODE" != "no" ] && [ -f "${pkg_install_dir}/lib/libfftw3_mpi.a" ]; then
+    fftw_libs="-lfftw3_mpi"
+  fi
+  fftw_libs="${fftw_libs} -lfftw3"
+  if [ -f "${pkg_install_dir}/lib/libfftw3_omp.a" ]; then
+    fftw_libs="${fftw_libs} -lfftw3_omp"
+  fi
+  FFTW_LIBS="${fftw_libs}"
   if [ "$with_fftw" != "__SYSTEM__" ]; then
     cat << EOF > "${BUILDDIR}/setup_fftw"
 prepend_path LD_LIBRARY_PATH "$pkg_install_dir/lib"
