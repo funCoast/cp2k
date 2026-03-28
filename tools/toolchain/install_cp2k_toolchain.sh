@@ -3,6 +3,11 @@
 # TODO: Review and if possible fix shellcheck errors.
 # shellcheck disable=all
 
+# Toolchain scripts rely on Perl-based helpers such as macOS shasum.
+# A forwarded C.UTF-8 locale can make those helpers fail, so normalize it.
+export LC_ALL=C
+export LANG=C
+
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")" && pwd -P)"
 

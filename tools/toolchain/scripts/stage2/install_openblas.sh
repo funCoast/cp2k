@@ -100,7 +100,13 @@ case "${with_openblas}" in
     OPENBLAS_ROOT="${pkg_install_dir}"
     # Prefer static library if available
     if [ -f "${pkg_install_dir}/lib/libopenblas.a" ]; then
-      OPENBLAS_LIBS="-l:libopenblas.a"
+      if [ "$(uname -s)" = "Darwin" ]; then
+        # macOS ld does not accept GNU-style -l:libfoo.a syntax in the same
+        # way as ELF toolchains, so prefer the regular shared-library name.
+        OPENBLAS_LIBS="-lopenblas"
+      else
+        OPENBLAS_LIBS="-l:libopenblas.a"
+      fi
     else
       OPENBLAS_LIBS="-lopenblas"
     fi

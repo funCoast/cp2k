@@ -38,6 +38,9 @@ case "${with_elpa}" in
     pkg_install_dir="${INSTALLDIR}/elpa-${elpa_ver}"
     install_lock_file="$pkg_install_dir/install_successful"
     enable_openmp="yes"
+    if [ "$(uname -s)" = "Darwin" ]; then
+      enable_openmp="no"
+    fi
 
     # specific settings needed on CRAY Linux Environment
     if [ "$ENABLE_CRAY" = "__TRUE__" ]; then
@@ -106,6 +109,19 @@ case "${with_elpa}" in
           elpa_ldflags="${elpa_math_ldflags} ${elpa_scalapack_ldflags} ${elpa_cray_ldflags}"
         fi
 
+        elpa_fcflags="${FCFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags} -fno-lto"
+        elpa_cflags="${CFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags} -fno-lto"
+        elpa_cxxflags="${CXXFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags} -fno-lto"
+        elpa_cpp="cpp -E"
+        elpa_fortran_cpp="cpp -P -traditional -Wall -Werror"
+        if [ "$(uname -s)" = "Darwin" ]; then
+          elpa_fcflags="${elpa_fcflags//-fopenmp/}"
+          elpa_cflags="${elpa_cflags//-fopenmp/}"
+          elpa_cxxflags="${elpa_cxxflags//-fopenmp/}"
+          elpa_cpp="${MPICC} -E"
+          elpa_fortran_cpp="gfortran -cpp -E -P"
+        fi
+
         mkdir -p "build_${TARGET}"
         cd "build_${TARGET}"
         ../configure --prefix="${pkg_install_dir}/${TARGET}/" \
@@ -113,8 +129,11 @@ case "${with_elpa}" in
           --enable-openmp=${enable_openmp} \
           --enable-shared=yes \
           --enable-static=yes \
+          --disable-affinity-checking \
+          --with-test-programs=no \
           --disable-c-tests \
           --disable-cpp-tests \
+          --without-threading-support-check-during-build \
           ${config_flags} \
           --enable-nvidia-gpu-kernels=$([ "$TARGET" = "nvidia" ] && echo "yes" || echo "no") \
           --with-cuda-path=${CUDA_PATH:-${CUDA_HOME:-/CUDA_HOME-notset}} \
@@ -125,15 +144,23 @@ case "${with_elpa}" in
           FC=${MPIFC} \
           CC=${MPICC} \
           CXX=${MPICXX} \
-          CPP="cpp -E" \
-          FCFLAGS="${FCFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags} -fno-lto" \
-          CFLAGS="${CFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags} -fno-lto" \
-          CXXFLAGS="${CXXFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags} -fno-lto" \
+          CPP="${elpa_cpp}" \
+          FCFLAGS="${elpa_fcflags}" \
+          CFLAGS="${elpa_cflags}" \
+          CXXFLAGS="${elpa_cxxflags}" \
+          FORTRAN_CPP="${elpa_fortran_cpp}" \
           LDFLAGS="${elpa_ldflags}" \
           LIBS="${SCALAPACK_LIBS} $(resolve_string "${MATH_LIBS}" "MPI")" \
           > configure.log 2>&1 || tail -n ${LOG_LINES} configure.log
-        make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-        make install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+        elpa_make_jobs="$(get_nprocs)"
+        if [ "$(uname -s)" = "Darwin" ]; then
+          # ELPA's Fortran module dependency generation is flaky on macOS when
+          # built in parallel. Keep it serial to avoid missing-module races.
+          elpa_make_jobs=1
+        fi
+        FORTRAN_CPP="${elpa_fortran_cpp}" make -j "${elpa_make_jobs}" .fortran_dependencies/dependencies.mk > deps.log 2>&1 || tail -n ${LOG_LINES} deps.log
+        FORTRAN_CPP="${elpa_fortran_cpp}" make -j "${elpa_make_jobs}" > make.log 2>&1 || tail -n ${LOG_LINES} make.log
+        FORTRAN_CPP="${elpa_fortran_cpp}" make install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
         cd ..
       done
       cd ..

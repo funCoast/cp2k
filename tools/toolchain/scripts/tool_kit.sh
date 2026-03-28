@@ -607,6 +607,7 @@ checksum() {
   local __filename=$1
   local __sha256=$2
   local __shasum_command='sha256sum'
+  local __locale_prefix='env LC_ALL=C LANG=C'
   # check if we have sha256sum command, Mac OS X does not have
   # sha256sum, but has an equivalent with shasum -a 256
   if command -v "$__shasum_command" > /dev/null 2>&1 && ! ${__shasum_command} --version 2>&1 | grep -q 'Darwin'; then
@@ -614,7 +615,7 @@ checksum() {
   else
     __shasum_command="shasum -a 256"
   fi
-  if echo "$__sha256  $__filename" | ${__shasum_command} --check; then
+  if echo "$__sha256  $__filename" | ${__locale_prefix} ${__shasum_command} --check; then
     echo "Checksum of $__filename Ok"
   else
     rm -v ${__filename}
@@ -651,6 +652,7 @@ download_pkg_from_cp2k_org() {
 verify_checksums() {
   local __checksum_file=$1
   local __shasum_command='sha256sum'
+  local __locale_prefix='env LC_ALL=C LANG=C'
 
   # check if we have sha256sum command, Mac OS X does not have
   # sha256sum, but has an equivalent with shasum -a 256
@@ -660,7 +662,7 @@ verify_checksums() {
     __shasum_command="shasum -a 256"
   fi
 
-  ${__shasum_command} --check "${__checksum_file}" > /dev/null 2>&1
+  ${__locale_prefix} ${__shasum_command} --check "${__checksum_file}" > /dev/null 2>&1
 }
 
 # write a checksum file $1 containing checksums for each given file $2, $3, ... (plus the $VERSION_FILE)
@@ -668,6 +670,7 @@ write_checksums() {
   local __checksum_file=$1
   shift # remove output file from arguments to be able to pass them along properly quoted
   local __shasum_command='sha256sum'
+  local __locale_prefix='env LC_ALL=C LANG=C'
 
   # check if we have sha256sum command, Mac OS X does not have
   # sha256sum, but has an equivalent with shasum -a 256
@@ -677,7 +680,7 @@ write_checksums() {
     __shasum_command="shasum -a 256"
   fi
 
-  ${__shasum_command} "${VERSION_FILE}" "$@" > "${__checksum_file}"
+  ${__locale_prefix} ${__shasum_command} "${VERSION_FILE}" "$@" > "${__checksum_file}"
 }
 
 # generate a filtered toolchain.env
@@ -692,6 +695,7 @@ write_toolchain_env() {
   # like the proxy vars which may affect fetching tarballs
   (
     unset COLORTERM DISPLAY EDITOR LESS LESSOPEN LOGNAME LS_COLORS PAGER
+    unset LANG LC_ALL LC_CTYPE
     unset TERM TERMCAP USER
     unset ftp_proxy http_proxy no_proxy
     unset GPG_AGENT_INFO SSH_AGENT_PID SSH_AUTH_SOCK SSH_CLIENT SSH_CONNECTION SSH_TTY
