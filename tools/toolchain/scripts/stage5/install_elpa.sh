@@ -91,11 +91,19 @@ case "${with_elpa}" in
         [ "$TARGET" = "nvidia" ] && [ "$ENABLE_CUDA" != "__TRUE__" ] && continue
         echo "Installing from scratch into ${pkg_install_dir}/${TARGET}"
 
-        elpa_ldflags="-Wl,--allow-multiple-definition -Wl,--enable-new-dtags ${MATH_LDFLAGS} ${SCALAPACK_LDFLAGS} ${cray_ldflags} -lstdc++"
+        elpa_math_ldflags="${MATH_LDFLAGS}"
+        elpa_scalapack_ldflags="${SCALAPACK_LDFLAGS}"
+        elpa_cray_ldflags="${cray_ldflags}"
         if [ "$(uname -s)" = "Darwin" ]; then
           # macOS ld does not understand the GNU ld flags used by the generic
           # ELPA recipe, and clang++ already provides the correct C++ runtime.
-          elpa_ldflags="${MATH_LDFLAGS} ${SCALAPACK_LDFLAGS} ${cray_ldflags}"
+          elpa_math_ldflags="${elpa_math_ldflags//\'/}"
+          elpa_scalapack_ldflags="${elpa_scalapack_ldflags//\'/}"
+          elpa_cray_ldflags="${elpa_cray_ldflags//\'/}"
+        fi
+        elpa_ldflags="-Wl,--allow-multiple-definition -Wl,--enable-new-dtags ${elpa_math_ldflags} ${elpa_scalapack_ldflags} ${elpa_cray_ldflags} -lstdc++"
+        if [ "$(uname -s)" = "Darwin" ]; then
+          elpa_ldflags="${elpa_math_ldflags} ${elpa_scalapack_ldflags} ${elpa_cray_ldflags}"
         fi
 
         mkdir -p "build_${TARGET}"
