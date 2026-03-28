@@ -57,6 +57,25 @@ else
   export FCFLAGS
   export CXXFLAGS
 fi
+
+# macOS toolchains often route MPI wrapper compilers through clang.
+# Strip a few GNU-specific flags that are harmless for direct gcc builds
+# but can make mpicc/mpic++ fail their configure-time compiler checks.
+if [ "$(uname -s)" = "Darwin" ]; then
+  CFLAGS="${CFLAGS//-Wa,-q/}"
+  CXXFLAGS="${CXXFLAGS//-Wa,-q/}"
+  FFLAGS="${FFLAGS//-Wa,-q/}"
+  F77FLAGS="${F77FLAGS//-Wa,-q/}"
+  F90FLAGS="${F90FLAGS//-Wa,-q/}"
+  FCFLAGS="${FCFLAGS//-Wa,-q/}"
+  CFLAGS="${CFLAGS//-Wl,-no_compact_unwind/}"
+  CXXFLAGS="${CXXFLAGS//-Wl,-no_compact_unwind/}"
+  FFLAGS="${FFLAGS//-Wl,-no_compact_unwind/}"
+  F77FLAGS="${F77FLAGS//-Wl,-no_compact_unwind/}"
+  F90FLAGS="${F90FLAGS//-Wl,-no_compact_unwind/}"
+  FCFLAGS="${FCFLAGS//-Wl,-no_compact_unwind/}"
+fi
+
 export LDFLAGS="${TSANFLAGS}"
 
 # get system arch information using OpenBLAS prebuild
