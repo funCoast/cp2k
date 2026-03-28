@@ -62,6 +62,7 @@ fi
 # Strip a few GNU-specific flags that are harmless for direct gcc builds
 # but can make mpicc/mpic++ fail their configure-time compiler checks.
 if [ "$(uname -s)" = "Darwin" ]; then
+  LIBOMP_PREFIX="/opt/homebrew/opt/libomp"
   CFLAGS="${CFLAGS//-Wa,-q/}"
   CXXFLAGS="${CXXFLAGS//-Wa,-q/}"
   FFLAGS="${FFLAGS//-Wa,-q/}"
@@ -74,9 +75,18 @@ if [ "$(uname -s)" = "Darwin" ]; then
   F77FLAGS="${F77FLAGS//-Wl,-no_compact_unwind/}"
   F90FLAGS="${F90FLAGS//-Wl,-no_compact_unwind/}"
   FCFLAGS="${FCFLAGS//-Wl,-no_compact_unwind/}"
+  CFLAGS="${CFLAGS//-fopenmp=libomp/}"
+  CFLAGS="${CFLAGS//-fopenmp/ -Xpreprocessor -fopenmp}"
+  CFLAGS="${CFLAGS} -I${LIBOMP_PREFIX}/include"
+  CXXFLAGS="${CXXFLAGS//-fopenmp=libomp/}"
+  CXXFLAGS="${CXXFLAGS//-fopenmp/ -Xpreprocessor -fopenmp}"
+  CXXFLAGS="${CXXFLAGS} -I${LIBOMP_PREFIX}/include"
 fi
 
 export LDFLAGS="${TSANFLAGS}"
+if [ "$(uname -s)" = "Darwin" ]; then
+  export LDFLAGS="${LDFLAGS} -L/opt/homebrew/opt/libomp/lib -lomp"
+fi
 
 # get system arch information using OpenBLAS prebuild
 ${SCRIPTDIR}/get_openblas_arch.sh

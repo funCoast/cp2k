@@ -33,6 +33,10 @@ case "${with_spfft}" in
         download_pkg_from_cp2k_org "${spfft_sha256}" "SpFFT-${spfft_ver}.tar.gz"
 
       fi
+      SPFFT_OMP="ON"
+      if [ "$(uname -s)" = "Darwin" ]; then
+        SPFFT_OMP="OFF"
+      fi
       if [ "${MATH_MODE}" = "mkl" ]; then
         EXTRA_CMAKE_FLAGS="-DSPFFT_MKL=ON -DSPFFT_FFTW_LIB=MKL"
       else
@@ -51,7 +55,7 @@ case "${with_spfft}" in
         -DCMAKE_VERBOSE_MAKEFILE=ON \
         -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-        -DSPFFT_OMP=ON \
+        -DSPFFT_OMP="${SPFFT_OMP}" \
         -DSPFFT_MPI=ON \
         -DSPFFT_STATIC=ON \
         -DSPFFT_FORTRAN=ON \
@@ -74,7 +78,7 @@ case "${with_spfft}" in
           -DCMAKE_CUDA_FLAGS="-std=c++14 -allow-unsupported-compiler" \
           -DCMAKE_VERBOSE_MAKEFILE=ON \
           -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
-          -DSPFFT_OMP=ON \
+          -DSPFFT_OMP="${SPFFT_OMP}" \
           -DSPFFT_MPI=ON \
           -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
           -DSPFFT_STATIC=ON \
@@ -102,7 +106,7 @@ case "${with_spfft}" in
               -DCMAKE_CUDA_FLAGS="-std=c++14 -allow-unsupported-compiler" \
               -DCMAKE_VERBOSE_MAKEFILE=ON \
               -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
-              -DSPFFT_OMP=ON \
+              -DSPFFT_OMP="${SPFFT_OMP}" \
               -DSPFFT_MPI=ON \
               -DSPFFT_STATIC=ON \
               -DSPFFT_FORTRAN=ON \

@@ -78,6 +78,8 @@ case "$with_sirius" in
     require_env COSMA_ROOT
     ARCH=$(uname -m)
     SIRIUS_OPT="-O3 -DNDEBUG -mtune=native -ftree-loop-vectorize ${MATH_CFLAGS}"
+    SIRIUS_BUILD_APPS="ON"
+    SIRIUS_USE_OPENMP="ON"
     if [ "$ARCH" = "ppc64le" ]; then
       SIRIUS_OPT="-O3 -DNDEBUG -mcpu=power8 -mtune=power8 -funroll-loops -ftree-vectorize  -mvsx  -maltivec  -mpopcntd  -mveclibabi=mass -fvect-cost-model -fpeel-loops -mcmodel=medium ${MATH_CFLAGS}"
       SIRIUS_DBG="-O2 -g -mcpu=power8 -mtune=power8 -funroll-loops -ftree-vectorize  -mvsx  -maltivec  -mpopcntd  -mveclibabi=mass -fvect-cost-model -fpeel-loops -mcmodel=medium ${MATH_CFLAGS}"
@@ -97,6 +99,12 @@ case "$with_sirius" in
         SIRIUS_OPT="-O3 -DNDEBUG -mtune=native -ftree-loop-vectorize ${MATH_CFLAGS}"
         SIRIUS_DBG="-O2 -g -mtune=native -ftree-loop-vectorize ${MATH_CFLAGS}"
       fi
+    fi
+    if [ "$(uname -s)" = "Darwin" ]; then
+      SIRIUS_BUILD_APPS="OFF"
+      SIRIUS_USE_OPENMP="OFF"
+      SIRIUS_OPT="-O3 -DNDEBUG ${MATH_CFLAGS}"
+      SIRIUS_DBG="-O2 -g ${MATH_CFLAGS}"
     fi
 
     pkg_install_dir="${INSTALLDIR}/sirius-${sirius_ver}"
@@ -157,6 +165,8 @@ case "$with_sirius" in
         -DSIRIUS_USE_PUGIXML=ON \
         -DSIRIUS_USE_MEMORY_POOL=OFF \
         -DSIRIUS_USE_ELPA=OFF \
+        -DSIRIUS_USE_OPENMP="${SIRIUS_USE_OPENMP}" \
+        -DSIRIUS_BUILD_APPS="${SIRIUS_BUILD_APPS}" \
         ${EXTRA_CMAKE_FLAGS} .. \
         > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
 
@@ -183,6 +193,8 @@ case "$with_sirius" in
           -DBUILD_SHARED_LIBS=OFF \
           -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
           -DSIRIUS_USE_PUGIXML=ON \
+          -DSIRIUS_USE_OPENMP="${SIRIUS_USE_OPENMP}" \
+          -DSIRIUS_BUILD_APPS="${SIRIUS_BUILD_APPS}" \
           -DCMAKE_CXX_COMPILER="${MPICXX}" \
           -DCMAKE_C_COMPILER="${MPICC}" \
           -DCMAKE_Fortran_COMPILER="${MPIFC}" \
