@@ -45,7 +45,7 @@ case "${with_gcc}" in
       cd gcc-${gcc_ver}
 
       # Download prerequisites from cp2k.org because gcc.gnu.org returns 403 when queried from GCP.
-      sed -i 's|http://gcc.gnu.org/pub/gcc/infrastructure/|https://cp2k.org/static/downloads/|' ./contrib/download_prerequisites
+      perl -0pi -e 's|http://gcc.gnu.org/pub/gcc/infrastructure/|https://cp2k.org/static/downloads/|g' ./contrib/download_prerequisites
       ./contrib/download_prerequisites > prereq.log 2>&1 || tail -n ${LOG_LINES} prereq.log
       GCCROOT=${PWD}
       mkdir obj

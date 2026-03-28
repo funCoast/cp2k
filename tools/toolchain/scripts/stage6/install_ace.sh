@@ -46,7 +46,7 @@ case "$with_ace" in
       cd ${ace_dir}
 
       # Fix for GCC 15
-      sed -i '1i #include <cstdint>' yaml-cpp/src/emitterutils.cpp
+      perl -0pi -e 's/\A/#include <cstdint>\n/' yaml-cpp/src/emitterutils.cpp
 
       mkdir build
       cd build

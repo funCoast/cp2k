@@ -88,9 +88,9 @@ case "$with_libint" in
 
       if [ "${with_intel}" != "__DONTUSE__" ]; then
         # Fix bug in makefile for Fortran module
-        sed -i -e "s/\$(CXX) \$(CXXFLAGS)/\$(FC) \$(FCFLAGS)/g" -e "s/\$(FCLIBS) -o/\$(FCLIBS) -lstdc++ -o/" fortran/Makefile
+        perl -0pi -e 's/\Q$(CXX) $(CXXFLAGS)\E/$(FC) $(FCFLAGS)/g; s/\Q$(FCLIBS) -o\E/$(FCLIBS) -lstdc++ -o/g' fortran/Makefile
         # Fix bug about autoconf spilling -loopopt option into link list
-        sed -i -e "s/-loopopt //g" MakeVars
+        perl -0pi -e 's/-loopopt //g' MakeVars
       fi
 
       make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
