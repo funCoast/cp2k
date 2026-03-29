@@ -24,6 +24,17 @@
 #include "grid_dgemm_tensor_local.h"
 #include "grid_dgemm_utils.h"
 
+#if defined(__SMEGEMM)
+static inline bool rowmajor_exact_compact(const int op1, const int op2,
+                                          const int m, const int n,
+                                          const int k, const int lda,
+                                          const int ldb, const int ldc) {
+  const int expected_lda = ((char)op1 == 'N') ? k : m;
+  const int expected_ldb = ((char)op2 == 'N') ? n : k;
+  return lda == expected_lda && ldb == expected_ldb && ldc == n;
+}
+#endif
+
 void convert_to_lattice_coordinates(const double dh_inv_[3][3],
                                     const double *restrict const rp,
                                     double *restrict rp_c) {
@@ -41,11 +52,67 @@ void dgemm_simplified(dgemm_params *const m) {
   if (m == NULL)
     abort();
 
+#if defined(__SMEGEMM)
+  const cp2k_smegemm_backend sme_backend = cp2k_smegemm_backend_from_env();
+  const bool sme_debug = cp2k_smegemm_debug_enabled() != 0;
+  if (sme_debug && sme_backend == CP2K_SMEGEMM_BACKEND_SME) {
+    fprintf(stderr,
+            "[SME-GEMM-dev]: dgemm_simplified enter op1=%c op2=%c m=%d n=%d k=%d lda=%d ldb=%d ldc=%d\n",
+            m->op1, m->op2, m->m, m->n, m->k, m->lda, m->ldb, m->ldc);
+    fflush(stderr);
+  }
+#endif
+
+#if defined(__SMEGEMM)
+  if (m->use_libxsmm &&
+      (sme_backend == CP2K_SMEGEMM_BACKEND_AUTO ||
+       sme_backend == CP2K_SMEGEMM_BACKEND_SME)) {
+#if defined(__LIBXSMM)
+    const cp2k_smegemm_backend fallback_backend =
+        (m->use_libxsmm && m->op2 == 'N') ? CP2K_SMEGEMM_BACKEND_LIBXSMM
+                                          : CP2K_SMEGEMM_BACKEND_BLAS;
+#else
+    const cp2k_smegemm_backend fallback_backend = CP2K_SMEGEMM_BACKEND_BLAS;
+#endif
+    if (rowmajor_exact_compact(m->op1, m->op2, m->m, m->n, m->k, m->lda,
+                               m->ldb, m->ldc)) {
+      if (sme_debug && sme_backend == CP2K_SMEGEMM_BACKEND_SME) {
+        fprintf(stderr,
+                "[SME-GEMM-dev]: dgemm_simplified try SME op1=%c op2=%c\n",
+                m->op1, m->op2);
+        fflush(stderr);
+      }
+      if (cp2k_smegemm_dgemm_rowmajor(m->op1, m->op2, m->m, m->n, m->k,
+                                      m->alpha, m->a, m->lda, m->b, m->ldb,
+                                      m->beta, m->c, m->ldc,
+                                      fallback_backend)) {
+        if (sme_debug && sme_backend == CP2K_SMEGEMM_BACKEND_SME) {
+          fprintf(stderr,
+                  "[SME-GEMM-dev]: dgemm_simplified SME done op1=%c op2=%c\n",
+                  m->op1, m->op2);
+          fflush(stderr);
+        }
+        return;
+      }
+    }
+    if (sme_debug && sme_backend == CP2K_SMEGEMM_BACKEND_SME) {
+      fprintf(stderr,
+              "[SME-GEMM-dev]: dgemm_simplified fallback from SME op1=%c op2=%c\n",
+              m->op1, m->op2);
+      fflush(stderr);
+    }
+  }
+#endif
+
 #if defined(__LIBXSMM)
 #if LIBXSMM_VERSION2(1, 17) >=                                                 \
         LIBXSMM_VERSION2(LIBXSMM_VERSION_MAJOR, LIBXSMM_VERSION_MINOR) &&      \
     (2079 > LIBXSMM_VERSION_PATCH)
-  if (m->use_libxsmm && m->op2 == 'N') {
+  if (m->use_libxsmm
+#if defined(__SMEGEMM)
+      && sme_backend != CP2K_SMEGEMM_BACKEND_BLAS
+#endif
+      && m->op2 == 'N') {
     /* we are in row major but xsmm is in column major */
     m->prefetch = LIBXSMM_PREFETCH_AUTO;
     /* in the future, more flags can be or'd together (like NONE | TRANS_B,
@@ -60,6 +127,12 @@ void dgemm_simplified(dgemm_params *const m) {
     }
 
     if (m->kernel) {
+      if (sme_backend == CP2K_SMEGEMM_BACKEND_SME) {
+        fprintf(stderr,
+                "[SME-GEMM-dev]: dgemm_simplified LIBXSMM call op1=%c op2=%c\n",
+                m->op1, m->op2);
+        fflush(stderr);
+      }
       m->kernel(m->b, m->a, m->c, m->b, m->a, m->c);
       return;
     }
@@ -110,11 +183,49 @@ void batched_dgemm_simplified(dgemm_params *const m, const int batch_size) {
   assert(m != NULL);
   assert(batch_size > 0);
 
+#if defined(__SMEGEMM)
+  const cp2k_smegemm_backend sme_backend = cp2k_smegemm_backend_from_env();
+#endif
+
+#if defined(__SMEGEMM)
+  if (m->use_libxsmm &&
+      (sme_backend == CP2K_SMEGEMM_BACKEND_AUTO ||
+       sme_backend == CP2K_SMEGEMM_BACKEND_SME)) {
+    const cp2k_smegemm_backend fallback_backend =
+#if defined(__LIBXSMM)
+        (m->use_libxsmm && m->op2 == 'N') ? CP2K_SMEGEMM_BACKEND_LIBXSMM
+                                          : CP2K_SMEGEMM_BACKEND_BLAS;
+#else
+        CP2K_SMEGEMM_BACKEND_BLAS;
+#endif
+    const double *a_array[batch_size];
+    const double *b_array[batch_size];
+    double *c_array[batch_size];
+    for (int s = 0; s < batch_size; ++s) {
+      a_array[s] = m[s].a;
+      b_array[s] = m[s].b;
+      c_array[s] = m[s].c;
+    }
+    if (rowmajor_exact_compact(m[0].op1, m[0].op2, m[0].m, m[0].n, m[0].k,
+                               m[0].lda, m[0].ldb, m[0].ldc)) {
+      if (cp2k_smegemm_dgemm_rowmajor_batch(
+              m[0].op1, m[0].op2, m[0].m, m[0].n, m[0].k, batch_size, a_array,
+              b_array, c_array, m[0].alpha, m[0].beta, fallback_backend)) {
+        return;
+      }
+    }
+  }
+#endif
+
 #if defined(__LIBXSMM)
 #if LIBXSMM_VERSION2(1, 17) >=                                                 \
         LIBXSMM_VERSION2(LIBXSMM_VERSION_MAJOR, LIBXSMM_VERSION_MINOR) &&      \
     (2079 > LIBXSMM_VERSION_PATCH)
-  if (m->use_libxsmm && m->op2 == 'N') {
+  if (m->use_libxsmm
+#if defined(__SMEGEMM)
+      && sme_backend != CP2K_SMEGEMM_BACKEND_BLAS
+#endif
+      && m->op2 == 'N') {
     /* we are in row major but xsmm is in column major */
     m->prefetch = LIBXSMM_PREFETCH_AUTO;
     /* in the future, more flags can be or'd together (like NONE | TRANS_B,

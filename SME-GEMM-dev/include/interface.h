@@ -45,7 +45,7 @@ enum class Strategy
 
 struct RuntimeConfig
 {
-    Strategy strategy = Strategy::AUTO;
+    Strategy strategy = Strategy::COSTMODEL;
     bool cache_enabled = true;
     bool auto_context_switch = false;
 };
@@ -61,6 +61,8 @@ bool is_cache_enabled();
 
 void set_auto_context_switch(bool enabled);
 bool is_auto_context_switch_enabled();
+
+bool is_debug_enabled();
 
 void clear_jit_cache();
 std::size_t jit_cache_size();
@@ -116,6 +118,28 @@ void sgemm_batch(char transa,
                  const float *const *a_array,
                  const float *const *b_array,
                  float *const *c_array) SMELT_API_SME_INOUT_ZA SMELT_API_SME_STREAMING_COMPAT;
+
+// Batched GEMM interface for column-major inputs.
+void dgemm_batch_colmajor(char transa,
+                          char transb,
+                          int m,
+                          int n,
+                          int k,
+                          std::int64_t batch,
+                          const double *const *a_array,
+                          const double *const *b_array,
+                          double *const *c_array) SMELT_API_SME_INOUT_ZA SMELT_API_SME_STREAMING_COMPAT;
+
+// Batched GEMM interface for column-major inputs.
+void sgemm_batch_colmajor(char transa,
+                          char transb,
+                          int m,
+                          int n,
+                          int k,
+                          std::int64_t batch,
+                          const float *const *a_array,
+                          const float *const *b_array,
+                          float *const *c_array) SMELT_API_SME_INOUT_ZA SMELT_API_SME_STREAMING_COMPAT;
 
 // Return a compiled batched GEMM kernel entry for the requested configuration.
 // The returned function pointer has signature: (batch, a_array, b_array, c_array, m, n, k).

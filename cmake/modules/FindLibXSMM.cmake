@@ -59,6 +59,29 @@ if(NOT CP2K_LIBXSMM_INCLUDE_DIRS)
   cp2k_include_dirs(LIBXSMM "libxsmm.h;include/libxsmm.h")
 endif()
 
+if(APPLE AND BUILD_SHARED_LIBS)
+  # Homebrew's libxsmm pkg-config metadata on macOS still advertises a static
+  # archive fallback (e.g. "-l:libxsmmext.a"), but Apple ld does not accept that
+  # syntax. The shared libraries are already present, so drop the static
+  # archive token and keep the .dylib entries.
+  foreach(__lib CP2K_LIBXSMM CP2K_LIBXSMMF CP2K_LIBXSMMEXT
+                CP2K_LIBXSMMNOBLAS LIBXSMM LIBXSMMF LIBXSMMEXT LIBXSMMNOBLAS)
+    if(DEFINED ${__lib}_LINK_LIBRARIES)
+      list(FILTER ${__lib}_LINK_LIBRARIES EXCLUDE REGEX "^:libxsmm.*\\.a$")
+    endif()
+    if(DEFINED ${__lib}_LDFLAGS)
+      string(REPLACE "-l:libxsmmext.a" "" ${__lib}_LDFLAGS
+                     "${${__lib}_LDFLAGS}")
+      string(REPLACE "-l:libxsmmf.a" "" ${__lib}_LDFLAGS
+                     "${${__lib}_LDFLAGS}")
+      string(REPLACE "-l:libxsmmnoblas.a" "" ${__lib}_LDFLAGS
+                     "${${__lib}_LDFLAGS}")
+      string(REPLACE "-l:libxsmm.a" "" ${__lib}_LDFLAGS
+                     "${${__lib}_LDFLAGS}")
+    endif()
+  endforeach()
+endif()
+
 if(CP2K_LIBXSMM_INCLUDE_DIRS)
   find_package_handle_standard_args(
     LibXSMM

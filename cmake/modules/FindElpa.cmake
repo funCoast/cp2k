@@ -18,7 +18,12 @@ find_package(PkgConfig)
 
 if(PKG_CONFIG_FOUND)
   if(CP2K_ENABLE_ELPA_OPENMP_SUPPORT)
-    pkg_search_module(CP2K_ELPA REQUIRED IMPORTED_TARGET GLOBAL elpa_openmp)
+    pkg_search_module(CP2K_ELPA QUIET IMPORTED_TARGET GLOBAL elpa_openmp)
+    if(NOT CP2K_ELPA_FOUND)
+      message(STATUS
+        "ELPA OpenMP pkg-config module not found, falling back to plain elpa")
+      pkg_search_module(CP2K_ELPA REQUIRED IMPORTED_TARGET GLOBAL elpa)
+    endif()
   else()
     pkg_search_module(CP2K_ELPA REQUIRED IMPORTED_TARGET GLOBAL elpa)
   endif()

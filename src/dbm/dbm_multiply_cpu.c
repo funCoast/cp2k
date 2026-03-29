@@ -9,7 +9,12 @@
 
 #include <assert.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
+
+#if defined(__SMEGEMM)
+#include "../grid/dgemm/sme_gemm_adapter.h"
+#endif
 
 #if defined(__LIBXSMM)
 #include <libxsmm.h>
@@ -60,14 +65,130 @@ static inline unsigned int hash(const dbm_task_t task) {
   return mnk;
 }
 
+#if defined(__SMEGEMM)
+static inline int task_shape_compare(const dbm_task_t *lhs,
+                                    const dbm_task_t *rhs) {
+  if (lhs->m != rhs->m) {
+    return lhs->m < rhs->m ? -1 : 1;
+  }
+  if (lhs->n != rhs->n) {
+    return lhs->n < rhs->n ? -1 : 1;
+  }
+  if (lhs->k != rhs->k) {
+    return lhs->k < rhs->k ? -1 : 1;
+  }
+  return 0;
+}
+
+static inline int dbm_sme_backend_enabled(void) {
+  const cp2k_smegemm_backend backend = cp2k_smegemm_backend_from_env();
+  return backend == CP2K_SMEGEMM_BACKEND_AUTO ||
+         backend == CP2K_SMEGEMM_BACKEND_SME;
+}
+
+static void dbm_add_scratch_to_c(const dbm_task_t *task,
+                                 const double alpha, const double *scratch,
+                                 dbm_shard_t *shard_c) {
+  double *const data_c = shard_c->data + task->offset_c;
+  const int elems = task->m * task->n;
+  if (alpha == 1.0) {
+    for (int i = 0; i < elems; ++i) {
+      data_c[i] += scratch[i];
+    }
+  } else {
+    for (int i = 0; i < elems; ++i) {
+      data_c[i] += alpha * scratch[i];
+    }
+  }
+}
+
+static int dbm_multiply_cpu_process_sme_group(
+    const int ngroup, const dbm_task_t group[ngroup], const double alpha,
+    const dbm_pack_t *pack_a, const dbm_pack_t *pack_b, dbm_shard_t *shard_c,
+    const int options) {
+  if (ngroup <= 0) {
+    return 1;
+  }
+  if (!dbm_sme_backend_enabled()) {
+    return 0;
+  }
+  if (alpha == 0.0) {
+    return 1;
+  }
+  const dbm_task_t task0 = group[0];
+  for (int i = 1; i < ngroup; ++i) {
+    if (group[i].m != task0.m || group[i].n != task0.n || group[i].k != task0.k) {
+      return 0;
+    }
+  }
+
+  // SME computes one compact output per task. We batch those outputs into a
+  // temporary scratch buffer and then accumulate them back into the actual C
+  // blocks so DBM keeps its original "beta-scaled C plus contributions"
+  // semantics.
+  const size_t scratch_elems =
+      (size_t)ngroup * (size_t)task0.m * (size_t)task0.n;
+  double *const scratch = malloc(scratch_elems * sizeof(double));
+  const double **a_array = malloc((size_t)ngroup * sizeof(double *));
+  const double **b_array = malloc((size_t)ngroup * sizeof(double *));
+  double **c_array = malloc((size_t)ngroup * sizeof(double *));
+  if (scratch == NULL || a_array == NULL || b_array == NULL || c_array == NULL) {
+    free(scratch);
+    free((void *)a_array);
+    free((void *)b_array);
+    free(c_array);
+    return 0;
+  }
+
+  for (int i = 0; i < ngroup; ++i) {
+    const dbm_task_t task = group[i];
+    a_array[i] = pack_a->data + task.offset_a;
+    b_array[i] = pack_b->data + task.offset_b;
+    c_array[i] = scratch + ((size_t)i * (size_t)task0.m * (size_t)task0.n);
+  }
+
+  const cp2k_smegemm_backend fallback_backend =
+#if defined(__LIBXSMM)
+      CP2K_SMEGEMM_BACKEND_LIBXSMM;
+#else
+      CP2K_SMEGEMM_BACKEND_BLAS;
+#endif
+
+  const int ok = cp2k_smegemm_dgemm_colmajor_batch(
+      'N', 'T', task0.m, task0.n, task0.k, ngroup, (const double *const *)a_array,
+      (const double *const *)b_array, (double *const *)c_array, 1.0, 0.0,
+      fallback_backend);
+  if (!ok) {
+    free(scratch);
+    free((void *)a_array);
+    free((void *)b_array);
+    free(c_array);
+    return 0;
+  }
+
+  for (int i = 0; i < ngroup; ++i) {
+    dbm_add_scratch_to_c(&group[i], alpha,
+                         scratch + ((size_t)i * (size_t)task0.m * (size_t)task0.n),
+                         shard_c);
+  }
+
+  free(scratch);
+  free((void *)a_array);
+  free((void *)b_array);
+  free(c_array);
+  (void)options;
+  return 1;
+}
+#endif
+
 /*******************************************************************************
  * \brief Internal routine for executing the tasks in given batch on the CPU.
  * \author Ole Schuett
  ******************************************************************************/
-void dbm_multiply_cpu_process_batch(int ntasks, const dbm_task_t batch[ntasks],
-                                    double alpha, const dbm_pack_t *pack_a,
-                                    const dbm_pack_t *pack_b,
-                                    dbm_shard_t *shard_c, int options) {
+static void dbm_multiply_cpu_process_batch_impl(
+    int ntasks, const dbm_task_t batch[ntasks], double alpha,
+    const dbm_pack_t *pack_a, const dbm_pack_t *pack_b, dbm_shard_t *shard_c,
+    int options) {
 
   if (0 >= ntasks) { // nothing to do
     return;
@@ -180,6 +301,114 @@ void dbm_multiply_cpu_process_batch(int ntasks, const dbm_task_t batch[ntasks],
                 task.n, 1.0, data_c, task.m);
     }
   }
+}
+
+#if defined(__SMEGEMM)
+/*******************************************************************************
+ * \brief SME-first batch path for DBM tasks.
+ * \author Ole Schuett
+ ******************************************************************************/
+static void dbm_multiply_cpu_process_batch_sme(
+    int ntasks, const dbm_task_t batch[ntasks], double alpha,
+    const dbm_pack_t *pack_a, const dbm_pack_t *pack_b, dbm_shard_t *shard_c,
+    int options) {
+
+  if (0 >= ntasks) {
+    return;
+  }
+  dbm_shard_allocate_promised_blocks(shard_c);
+
+  int batch_order[ntasks];
+  if (DBM_MULTIPLY_TASK_REORDER & options) {
+    int buckets[DBM_BATCH_NUM_BUCKETS] = {0};
+    for (int itask = 0; itask < ntasks; ++itask) {
+      const int i = hash(batch[itask]) % DBM_BATCH_NUM_BUCKETS;
+      ++buckets[i];
+    }
+    for (int i = 1; i < DBM_BATCH_NUM_BUCKETS; ++i) {
+      buckets[i] += buckets[i - 1];
+    }
+    assert(buckets[DBM_BATCH_NUM_BUCKETS - 1] == ntasks);
+    for (int itask = 0; itask < ntasks; ++itask) {
+      const int i = hash(batch[itask]) % DBM_BATCH_NUM_BUCKETS;
+      --buckets[i];
+      batch_order[buckets[i]] = itask;
+    }
+  } else {
+    for (int itask = 0; itask < ntasks; ++itask) {
+      batch_order[itask] = itask;
+    }
+  }
+
+  // Stable exact-shape sort to maximize SME batch length.
+  for (int i = 1; i < ntasks; ++i) {
+    const int idx = batch_order[i];
+    int j = i - 1;
+    while (j >= 0 &&
+           task_shape_compare(&batch[batch_order[j]], &batch[idx]) > 0) {
+      batch_order[j + 1] = batch_order[j];
+      --j;
+    }
+    batch_order[j + 1] = idx;
+  }
+
+  int group_start = 0;
+  while (group_start < ntasks) {
+    const dbm_task_t first = batch[batch_order[group_start]];
+    int group_end = group_start + 1;
+    while (group_end < ntasks) {
+      const dbm_task_t next = batch[batch_order[group_end]];
+      if (next.m != first.m || next.n != first.n || next.k != first.k) {
+        break;
+      }
+      ++group_end;
+    }
+
+    const int ngroup = group_end - group_start;
+    if (ngroup >= 2) {
+      dbm_task_t group[ngroup];
+      for (int i = 0; i < ngroup; ++i) {
+        group[i] = batch[batch_order[group_start + i]];
+      }
+      if (dbm_multiply_cpu_process_sme_group(ngroup, group, alpha, pack_a,
+                                             pack_b, shard_c, options)) {
+        group_start = group_end;
+        continue;
+      }
+    }
+
+    // Fallback to the existing CPU path for this shape group.
+    {
+      dbm_task_t group[ngroup];
+      for (int i = 0; i < ngroup; ++i) {
+        group[i] = batch[batch_order[group_start + i]];
+      }
+      dbm_multiply_cpu_process_batch_impl(ngroup, group, alpha, pack_a, pack_b,
+                                          shard_c, options);
+    }
+    group_start = group_end;
+  }
+}
+#endif
+
+/*******************************************************************************
+ * \brief Internal routine for executing the tasks in given batch on the CPU.
+ * \author Ole Schuett
+ ******************************************************************************/
+void dbm_multiply_cpu_process_batch(int ntasks, const dbm_task_t batch[ntasks],
+                                    double alpha, const dbm_pack_t *pack_a,
+                                    const dbm_pack_t *pack_b,
+                                    dbm_shard_t *shard_c, int options) {
+#if defined(__SMEGEMM)
+  if (dbm_sme_backend_enabled() &&
+      0 == (options & DBM_MULTIPLY_BLAS_LIBRARY)) {
+    dbm_multiply_cpu_process_batch_sme(ntasks, batch, alpha, pack_a, pack_b,
+                                       shard_c, options);
+    return;
+  }
+#endif
+  dbm_multiply_cpu_process_batch_impl(ntasks, batch, alpha, pack_a, pack_b,
+                                      shard_c, options);
 }
 
 // EOF

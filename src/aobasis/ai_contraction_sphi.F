@@ -15,6 +15,9 @@
 MODULE ai_contraction_sphi
 
    USE kinds, ONLY: dp, int_8
+#if defined(__SMEGEMM)
+   USE, INTRINSIC :: ISO_C_BINDING, ONLY: c_double, c_int
+#endif
 #if defined(__LIBXSMM)
    USE libxsmm, ONLY: LIBXSMM_PREFETCH_NONE, &
                       libxsmm_blasint_kind, &
@@ -33,7 +36,31 @@ MODULE ai_contraction_sphi
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'ai_contraction_sphi'
 
+#if defined(__SMEGEMM)
+   INTEGER(C_INT), PARAMETER, PRIVATE :: sme_backend_auto = 0_C_INT
+   INTEGER(C_INT), PARAMETER, PRIVATE :: sme_backend_sme = 1_C_INT
+   INTEGER(C_INT), PARAMETER, PRIVATE :: sme_backend_libxsmm = 2_C_INT
+   INTEGER(C_INT), PARAMETER, PRIVATE :: sme_backend_blas = 3_C_INT
+#endif
+
    PUBLIC :: ab_contract, abc_contract, abcd_contract, abc_contract_xsmm
+
+#if defined(__SMEGEMM)
+   INTERFACE
+      INTEGER(C_INT) FUNCTION cp2k_smegemm_backend_from_env() BIND(C, NAME="cp2k_smegemm_backend_from_env")
+         IMPORT :: c_int
+      END FUNCTION cp2k_smegemm_backend_from_env
+
+      INTEGER(C_INT) FUNCTION cp2k_smegemm_dgemm_colmajor(transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, &
+                                                           fallback_backend) BIND(C, NAME="cp2k_smegemm_dgemm_colmajor")
+         IMPORT :: c_double, c_int
+         INTEGER(C_INT), VALUE                         :: transa, transb, m, n, k, lda, ldb, ldc, fallback_backend
+         REAL(C_DOUBLE), VALUE                          :: alpha, beta
+         REAL(C_DOUBLE), DIMENSION(*), INTENT(IN)       :: a, b
+         REAL(C_DOUBLE), DIMENSION(*), INTENT(INOUT)    :: c
+      END FUNCTION cp2k_smegemm_dgemm_colmajor
+   END INTERFACE
+#endif
 
 CONTAINS
 
@@ -266,6 +293,10 @@ CONTAINS
       INTEGER(KIND=int_8)                                     :: cpp_size, ccp_size
       INTEGER                                                 :: handle, i
       LOGICAL                                                 :: ab_first
+      LOGICAL                                                 :: use_sme, use_libxsmm_backend, sme_ok
+#if defined(__SMEGEMM)
+      INTEGER(C_INT)                                          :: backend, fallback_backend, trans_n
+#endif
 #if defined(__LIBXSMM)
       TYPE(libxsmm_dmmfunction)                               :: xmm1, xmm2
 #endif
@@ -303,51 +334,112 @@ CONTAINS
       END IF
 
       ! loop over the last index of the matrix and call LIBXSMM/BLAS to contract over a and b
+      use_libxsmm_backend = .TRUE.
+#if defined(__SMEGEMM)
+      backend = cp2k_smegemm_backend_from_env()
+      use_sme = (backend == sme_backend_auto .OR. backend == sme_backend_sme)
+      use_libxsmm_backend = (backend /= sme_backend_blas)
+      trans_n = INT(IACHAR('N'), KIND=C_INT)
 #if defined(__LIBXSMM)
-      IF (ab_first) THEN ! (AB)C: dispatch kernels
-         CALL libxsmm_dispatch(xmm1, nsgfa, ncob, ncoa, beta=0.0_dp, prefetch=LIBXSMM_PREFETCH_NONE)
-         CALL libxsmm_dispatch(xmm2, nsgfa, nsgfb, ncob, beta=0.0_dp, prefetch=LIBXSMM_PREFETCH_NONE)
-      ELSE ! A(BC): dispatch kernels
-         CALL libxsmm_dispatch(xmm1, ncoa, nsgfb, ncob, beta=0.0_dp, prefetch=LIBXSMM_PREFETCH_NONE)
-         CALL libxsmm_dispatch(xmm2, nsgfa, nsgfb, ncoa, beta=0.0_dp, prefetch=LIBXSMM_PREFETCH_NONE)
-      END IF
+      fallback_backend = sme_backend_libxsmm
+#else
+      fallback_backend = sme_backend_blas
+#endif
 
-      IF (libxsmm_available(xmm1) .AND. libxsmm_available(xmm2)) THEN
-         IF (ab_first) THEN ! (AB)C
+      IF (use_sme) THEN
+         sme_ok = .TRUE.
+         IF (ab_first) THEN
             DO i = 0, ncoc - 1 ! contractions over a and b
                ! [nsgfa,ncoa] x [ncoa,ncob] -> [nsgfa,ncob]
-               CALL libxsmm_dmmcall(xmm1, sphi_a, sabc(i*ncoa*ncob + 1), cpp_buffer)
+               IF (cp2k_smegemm_dgemm_colmajor(trans_n, trans_n, nsgfa, ncob, ncoa, 1.0_dp, sphi_a, nsgfa, &
+                                                sabc(i*ncoa*ncob + 1), ncoa, 0.0_dp, cpp_buffer, nsgfa, &
+                                                fallback_backend) /= 1) THEN
+                  sme_ok = .FALSE.
+                  EXIT
+               END IF
                ! [nsgfa,ncob] x [ncob,nsgfb] -> [nsgfa,nsgfb]
-               CALL libxsmm_dmmcall(xmm2, cpp_buffer, sphi_b, ccp_buffer(i*nsgfa*nsgfb + 1))
+               IF (cp2k_smegemm_dgemm_colmajor(trans_n, trans_n, nsgfa, nsgfb, ncob, 1.0_dp, cpp_buffer, nsgfa, &
+                                                sphi_b, ncob, 0.0_dp, ccp_buffer(i*nsgfa*nsgfb + 1), nsgfa, &
+                                                fallback_backend) /= 1) THEN
+                  sme_ok = .FALSE.
+                  EXIT
+               END IF
             END DO
          ELSE ! A(BC)
             DO i = 0, ncoc - 1 ! contractions over a and b
                ! [ncoa,ncob] x [ncob,nsgfb] -> [ncoa,nsgfb]
-               CALL libxsmm_dmmcall(xmm1, sabc(i*ncoa*ncob + 1), sphi_b, cpp_buffer)
+               IF (cp2k_smegemm_dgemm_colmajor(trans_n, trans_n, ncoa, nsgfb, ncob, 1.0_dp, sabc(i*ncoa*ncob + 1), &
+                                                ncoa, sphi_b, ncob, 0.0_dp, cpp_buffer, ncoa, fallback_backend) /= 1) THEN
+                  sme_ok = .FALSE.
+                  EXIT
+               END IF
                ! [nsgfa,ncoa] x [ncoa,nsgfb] -> [nsgfa,nsgfb]
-               CALL libxsmm_dmmcall(xmm2, sphi_a, cpp_buffer, ccp_buffer(i*nsgfa*nsgfb + 1))
+               IF (cp2k_smegemm_dgemm_colmajor(trans_n, trans_n, nsgfa, nsgfb, ncoa, 1.0_dp, sphi_a, nsgfa, &
+                                                cpp_buffer, ncoa, 0.0_dp, ccp_buffer(i*nsgfa*nsgfb + 1), nsgfa, &
+                                                fallback_backend) /= 1) THEN
+                  sme_ok = .FALSE.
+                  EXIT
+               END IF
             END DO
          END IF
-      ELSE
-#endif
-         IF (ab_first) THEN ! (AB)C
-            DO i = 0, ncoc - 1 ! contractions over a and b
-               CALL dgemm("N", "N", nsgfa, ncob, ncoa, 1.0_dp, sphi_a, nsgfa, sabc(i*ncoa*ncob + 1), &
-                          ncoa, 0.0_dp, cpp_buffer, nsgfa) ! [nsgfa,ncoa] x [ncoa,ncob] -> [nsgfa,ncob]
-               CALL dgemm("N", "N", nsgfa, nsgfb, ncob, 1.0_dp, cpp_buffer, nsgfa, sphi_b, ncob, 0.0_dp, &
-                          ccp_buffer(i*nsgfa*nsgfb + 1), nsgfa) ! [nsgfa,ncob] x [ncob,nsgfb] -> [nsgfa,nsgfb]
-            END DO
-         ELSE ! A(BC)
-            DO i = 0, ncoc - 1 ! contractions over a and b
-               CALL dgemm("N", "N", ncoa, nsgfb, ncob, 1.0_dp, sabc(i*ncoa*ncob + 1), ncoa, sphi_b, &
-                          ncob, 0.0_dp, cpp_buffer, ncoa) ! [ncoa,ncob] x [ncob,nsgfb] -> [ncoa,nsgfb]
-               CALL dgemm("N", "N", nsgfa, nsgfb, ncoa, 1.0_dp, sphi_a, nsgfa, cpp_buffer, ncoa, 0.0_dp, &
-                          ccp_buffer(i*nsgfa*nsgfb + 1), nsgfa) ! [nsgfa,ncoa] x [ncoa,nsgfb] -> [nsgfa,nsgfb]
-            END DO
+
+         IF (sme_ok) THEN
+            IF (cp2k_smegemm_dgemm_colmajor(trans_n, trans_n, nsgfa*nsgfb, nsgfc, ncoc, alpha, ccp_buffer, &
+                                             nsgfa*nsgfb, sphi_c, ncoc, beta, abcint, nsgfa*nsgfb, fallback_backend) &
+                == 1) THEN
+               CALL timestop(handle)
+               RETURN
+            END IF
          END IF
-#if defined(__LIBXSMM)
       END IF
 #endif
+
+#if defined(__LIBXSMM)
+      IF (use_libxsmm_backend) THEN
+         IF (ab_first) THEN ! (AB)C: dispatch kernels
+            CALL libxsmm_dispatch(xmm1, nsgfa, ncob, ncoa, beta=0.0_dp, prefetch=LIBXSMM_PREFETCH_NONE)
+            CALL libxsmm_dispatch(xmm2, nsgfa, nsgfb, ncob, beta=0.0_dp, prefetch=LIBXSMM_PREFETCH_NONE)
+         ELSE ! A(BC): dispatch kernels
+            CALL libxsmm_dispatch(xmm1, ncoa, nsgfb, ncob, beta=0.0_dp, prefetch=LIBXSMM_PREFETCH_NONE)
+            CALL libxsmm_dispatch(xmm2, nsgfa, nsgfb, ncoa, beta=0.0_dp, prefetch=LIBXSMM_PREFETCH_NONE)
+         END IF
+
+         IF (libxsmm_available(xmm1) .AND. libxsmm_available(xmm2)) THEN
+            IF (ab_first) THEN ! (AB)C
+               DO i = 0, ncoc - 1 ! contractions over a and b
+                  ! [nsgfa,ncoa] x [ncoa,ncob] -> [nsgfa,ncob]
+                  CALL libxsmm_dmmcall(xmm1, sphi_a, sabc(i*ncoa*ncob + 1), cpp_buffer)
+                  ! [nsgfa,ncob] x [ncob,nsgfb] -> [nsgfa,nsgfb]
+                  CALL libxsmm_dmmcall(xmm2, cpp_buffer, sphi_b, ccp_buffer(i*nsgfa*nsgfb + 1))
+               END DO
+            ELSE ! A(BC)
+               DO i = 0, ncoc - 1 ! contractions over a and b
+                  ! [ncoa,ncob] x [ncob,nsgfb] -> [ncoa,nsgfb]
+                  CALL libxsmm_dmmcall(xmm1, sabc(i*ncoa*ncob + 1), sphi_b, cpp_buffer)
+                  ! [nsgfa,ncoa] x [ncoa,nsgfb] -> [nsgfa,nsgfb]
+                  CALL libxsmm_dmmcall(xmm2, sphi_a, cpp_buffer, ccp_buffer(i*nsgfa*nsgfb + 1))
+               END DO
+            END IF
+            CALL timestop(handle)
+            RETURN
+         END IF
+      END IF
+#endif
+      IF (ab_first) THEN ! (AB)C
+         DO i = 0, ncoc - 1 ! contractions over a and b
+            CALL dgemm("N", "N", nsgfa, ncob, ncoa, 1.0_dp, sphi_a, nsgfa, sabc(i*ncoa*ncob + 1), &
+                       ncoa, 0.0_dp, cpp_buffer, nsgfa) ! [nsgfa,ncoa] x [ncoa,ncob] -> [nsgfa,ncob]
+            CALL dgemm("N", "N", nsgfa, nsgfb, ncob, 1.0_dp, cpp_buffer, nsgfa, sphi_b, ncob, 0.0_dp, &
+                       ccp_buffer(i*nsgfa*nsgfb + 1), nsgfa) ! [nsgfa,ncob] x [ncob,nsgfb] -> [nsgfa,nsgfb]
+         END DO
+      ELSE ! A(BC)
+         DO i = 0, ncoc - 1 ! contractions over a and b
+            CALL dgemm("N", "N", ncoa, nsgfb, ncob, 1.0_dp, sabc(i*ncoa*ncob + 1), ncoa, sphi_b, &
+                       ncob, 0.0_dp, cpp_buffer, ncoa) ! [ncoa,ncob] x [ncob,nsgfb] -> [ncoa,nsgfb]
+            CALL dgemm("N", "N", nsgfa, nsgfb, ncoa, 1.0_dp, sphi_a, nsgfa, cpp_buffer, ncoa, 0.0_dp, &
+                       ccp_buffer(i*nsgfa*nsgfb + 1), nsgfa) ! [nsgfa,ncoa] x [ncoa,nsgfb] -> [nsgfa,nsgfb]
+         END DO
+      END IF
       ! contractions over c: [nsgfa*nsgfb,ncoc] x [ncoc,nsgfc] -> [sgfa*nsgfb,nsgfc]
       CALL dgemm("N", "N", nsgfa*nsgfb, nsgfc, ncoc, alpha, ccp_buffer, nsgfa*nsgfb, &
                  sphi_c, ncoc, beta, abcint, nsgfa*nsgfb)

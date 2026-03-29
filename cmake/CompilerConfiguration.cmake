@@ -33,6 +33,14 @@ endif()
 
 # ================================ GNU Compilers ===============================
 
+set(CP2K_GNU_CPU_FLAGS "-march=native;-mtune=native")
+if(APPLE)
+  # Homebrew GCC on macOS can reject the generic -march=native expansion while
+  # accepting -mcpu=native. Keep the optimization intent but use the macOS-safe
+  # spelling.
+  set(CP2K_GNU_CPU_FLAGS "-mcpu=native")
+endif()
+
 # Baseline
 add_compile_options(
   "$<$<COMPILE_LANG_AND_ID:Fortran,GNU>:-std=f2008;-ffree-form;-fimplicit-none>"
@@ -51,9 +59,9 @@ add_compile_options(
 
 # Release
 add_compile_options(
-  "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANG_AND_ID:Fortran,GNU>>:-O3;-march=native;-mtune=native;-funroll-loops>"
-  "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANG_AND_ID:CXX,GNU>>:-O3;-march=native;-mtune=native;-funroll-loops>"
-  "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANG_AND_ID:C,GNU>>:-O3;-march=native;-mtune=native;-funroll-loops>"
+  "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANG_AND_ID:Fortran,GNU>>:-O3;${CP2K_GNU_CPU_FLAGS};-funroll-loops>"
+  "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANG_AND_ID:CXX,GNU>>:-O3;${CP2K_GNU_CPU_FLAGS};-funroll-loops>"
+  "$<$<AND:$<CONFIG:RELEASE>,$<COMPILE_LANG_AND_ID:C,GNU>>:-O3;${CP2K_GNU_CPU_FLAGS};-funroll-loops>"
 )
 
 # Generic
@@ -65,9 +73,9 @@ add_compile_options(
 
 # Debug
 add_compile_options(
-  "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANG_AND_ID:Fortran,GNU>>:-O1;-march=native;-mtune=native>"
-  "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANG_AND_ID:CXX,GNU>>:-O1;-march=native;-mtune=native>"
-  "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANG_AND_ID:C,GNU>>:-O1;-march=native;-mtune=native;-Wall;-Wextra;-Werror>"
+  "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANG_AND_ID:Fortran,GNU>>:-O1;${CP2K_GNU_CPU_FLAGS}>"
+  "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANG_AND_ID:CXX,GNU>>:-O1;${CP2K_GNU_CPU_FLAGS}>"
+  "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANG_AND_ID:C,GNU>>:-O1;${CP2K_GNU_CPU_FLAGS};-Wall;-Wextra;-Werror>"
 )
 add_compile_options(
   "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANG_AND_ID:Fortran,GNU>>:-fsanitize=leak;-Werror=realloc-lhs>"
@@ -87,9 +95,15 @@ add_link_options(
   "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANG_AND_ID:CXX,GNU>>:-fsanitize=leak>"
   "$<$<AND:$<CONFIG:DEBUG>,$<COMPILE_LANG_AND_ID:C,GNU>>:-fsanitize=leak>")
 
+if(APPLE)
+  # macOS does not provide /proc/self/statm. Disable the Linux-specific memory
+  # sampling path so tools like regtests can run without tripping over it.
+  add_compile_definitions(__NO_STATM_ACCESS)
+endif()
+
 # Conventions
 add_compile_options(
-  "$<$<CONFIG:CONVENTIONS>:-O1;-march=native;-mtune=native>"
+  "$<$<CONFIG:CONVENTIONS>:-O1;${CP2K_GNU_CPU_FLAGS}>"
   "$<$<AND:$<CONFIG:CONVENTIONS>,$<COMPILE_LANG_AND_ID:Fortran,GNU>>:-Wno-pedantic;-Wall;-Wextra;-Wsurprising>"
   "$<$<AND:$<CONFIG:CONVENTIONS>,$<COMPILE_LANG_AND_ID:Fortran,GNU>>:-Warray-temporaries;-Wconversion-extra;-Wimplicit-interface>"
   "$<$<AND:$<CONFIG:CONVENTIONS>,$<COMPILE_LANG_AND_ID:Fortran,GNU>>:-Wimplicit-procedure;-Wreal-q-constant;-Walign-commons>"
@@ -101,13 +115,13 @@ add_compile_options(
 
 # Coverage
 add_compile_options(
-  "$<$<CONFIG:COVERAGE>:-coverage;-fkeep-static-functions;-O1;-march=native;-mtune=native>"
+  "$<$<CONFIG:COVERAGE>:-coverage;-fkeep-static-functions;-O1;${CP2K_GNU_CPU_FLAGS}>"
 )
 add_compile_definitions("$<$<CONFIG:COVERAGE>:__NO_ABORT>")
 
 # Address Sanitizer
 add_compile_options(
-  "$<$<CONFIG:ASAN>:-fsanitize=address;-no-pie;-O3;-march=native;-mtune=native;-funroll-loops>"
+  "$<$<CONFIG:ASAN>:-fsanitize=address;-no-pie;-O3;${CP2K_GNU_CPU_FLAGS};-funroll-loops>"
 )
 add_link_options("$<$<CONFIG:ASAN>:-fsanitize=address>")
 

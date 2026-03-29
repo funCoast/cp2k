@@ -14,24 +14,26 @@ set(COSTMODEL_BENCH_REPEATS "3" CACHE STRING "Repeat count for overlap_bench col
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CXX_STANDARD 20)
+set(SME_GEMM_ROOT "${CMAKE_CURRENT_LIST_DIR}")
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 option(SME_GEMM_BUILD_THIRDPARTY "Automatically build third-party dependencies during builds" ON)
+option(SME_GEMM_BUILD_TESTS "Build SME-GEMM-dev tests" ON)
 
 set(COSTMODEL_GEN_INCLUDE_DIR "${CMAKE_BINARY_DIR}/generated/include")
 set(COSTMODEL_GEN_HEADER "${COSTMODEL_GEN_INCLUDE_DIR}/cost_config.h")
 set(COSTMODEL_AUTO_CSV "${CMAKE_BINARY_DIR}/generated/overlap_metrics.csv")
-set(SME_GEMM_THIRDPARTY_SCRIPT "${CMAKE_SOURCE_DIR}/scripts/build_thirdparty.sh")
-set(SME_GEMM_THIRDPARTY_FETCH_SCRIPT "${CMAKE_SOURCE_DIR}/scripts/fetch_armpl.sh")
+set(SME_GEMM_THIRDPARTY_SCRIPT "${SME_GEMM_ROOT}/scripts/build_thirdparty.sh")
+set(SME_GEMM_THIRDPARTY_FETCH_SCRIPT "${SME_GEMM_ROOT}/scripts/fetch_armpl.sh")
 set(SME_GEMM_THIRDPARTY_STAMP_DIR "${CMAKE_BINARY_DIR}/thirdparty")
 set(SME_GEMM_THIRDPARTY_STAMP "${SME_GEMM_THIRDPARTY_STAMP_DIR}/build.stamp")
 set(SME_GEMM_BUILD_ENV_PATH "$ENV{PATH}")
 set(SME_GEMM_BUILD_ENV_HOME "$ENV{HOME}")
 file(MAKE_DIRECTORY "${COSTMODEL_GEN_INCLUDE_DIR}")
 
-set(COSTMODEL_GENERATOR "${CMAKE_SOURCE_DIR}/microbench/generate_cost_config.py")
-set(COSTMODEL_KERNEL_BENCH "${CMAKE_SOURCE_DIR}/microbench/kernel_cost_bench.py")
+set(COSTMODEL_GENERATOR "${SME_GEMM_ROOT}/microbench/generate_cost_config.py")
+set(COSTMODEL_KERNEL_BENCH "${SME_GEMM_ROOT}/microbench/kernel_cost_bench.py")
 set(COSTMODEL_OVERRIDE_ARGS)
 if(COSTMODEL_OVERRIDE_JSON)
 	list(APPEND COSTMODEL_OVERRIDE_ARGS --override-json "${COSTMODEL_OVERRIDE_JSON}")
@@ -47,7 +49,7 @@ if(SME_GEMM_BUILD_THIRDPARTY)
 			/usr/bin/env bash "${SME_GEMM_THIRDPARTY_SCRIPT}" build
 		COMMAND ${CMAKE_COMMAND} -E touch "${SME_GEMM_THIRDPARTY_STAMP}"
 		DEPENDS "${SME_GEMM_THIRDPARTY_SCRIPT}" "${SME_GEMM_THIRDPARTY_FETCH_SCRIPT}"
-		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+		WORKING_DIRECTORY "${SME_GEMM_ROOT}"
 		COMMENT "Building third-party dependencies"
 		VERBATIM)
 
@@ -60,7 +62,7 @@ if(SME_GEMM_BUILD_THIRDPARTY)
 			"HOME=${SME_GEMM_BUILD_ENV_HOME}"
 			/usr/bin/env bash "${SME_GEMM_THIRDPARTY_SCRIPT}" rebuild
 		COMMAND ${CMAKE_COMMAND} -E touch "${SME_GEMM_THIRDPARTY_STAMP}"
-		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+		WORKING_DIRECTORY "${SME_GEMM_ROOT}"
 		COMMENT "Rebuilding third-party dependencies"
 		VERBATIM)
 else()
@@ -79,7 +81,9 @@ add_compile_options("-std=c++20")
 include_directories(BEFORE "${COSTMODEL_GEN_INCLUDE_DIR}")
 include_directories(include)
 add_subdirectory(src)
-add_subdirectory(test)
+if(SME_GEMM_BUILD_TESTS)
+	add_subdirectory(test)
+endif()
 add_subdirectory(microbench)
 add_subdirectory(motivation)
 
@@ -124,8 +128,8 @@ else()
 	message(STATUS "COSTMODEL_AUTOGEN=OFF and no custom config, using checked-in default include/cost_config.h")
 	add_custom_command(
 		OUTPUT "${COSTMODEL_GEN_HEADER}"
-		COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/include/cost_config.h" "${COSTMODEL_GEN_HEADER}"
-		DEPENDS "${CMAKE_SOURCE_DIR}/include/cost_config.h"
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SME_GEMM_ROOT}/include/cost_config.h" "${COSTMODEL_GEN_HEADER}"
+		DEPENDS "${SME_GEMM_ROOT}/include/cost_config.h"
 		COMMENT "Copying default cost_config.h"
 		VERBATIM)
 endif()

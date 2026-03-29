@@ -1,0 +1,21 @@
+# CP2K build trees
+/build/
+/build-*/
+/build-core/
+/cmake-build-*/
+
+# Toolchain artifacts
+/tools/toolchain/build/
+/tools/toolchain/install/
+
+# Local test outputs
+/TEST-*/
+/*.log
+
+# Generic compiler outputs
+*.o
+*.a
+*.so
+*.dylib
+*.mod
+*.smod

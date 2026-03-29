@@ -21,6 +21,10 @@
 #include <libxsmm.h>
 #endif
 
+#if defined(__SMEGEMM)
+#include "sme_gemm_adapter.h"
+#endif
+
 #include "../common/grid_common.h"
 #include "grid_dgemm_private_header.h"
 #include "grid_dgemm_tensor_local.h"

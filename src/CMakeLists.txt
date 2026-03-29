@@ -1481,6 +1481,19 @@ list(APPEND CP2K_SRCS_F grpp/libgrpp.F)
 set(CP2K_FPGA_SRC_C pw/fpga/fft_fpga.c pw/fpga/opencl_utils.c)
 set(CP2K_PW_SRCS_C pw/gpu/pw_gpu_internal.c)
 set(CP2K_SRCS_CPP torch_c_api.cpp ace_c_api.cpp)
+set(CP2K_SMEGEMM_SRCS_CPP "")
+
+if(CP2K_USE_SMEGEMM)
+  list(APPEND CP2K_SMEGEMM_SRCS_CPP grid/dgemm/sme_gemm_adapter.cpp)
+endif()
+
+if(CP2K_USE_SMEGEMM)
+  add_library(cp2k_smegemm STATIC ${CP2K_SMEGEMM_SRCS_CPP})
+  target_link_libraries(cp2k_smegemm PUBLIC SMELT)
+  target_include_directories(
+    cp2k_smegemm PUBLIC $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/SME-GEMM-dev/include>)
+  set_target_properties(cp2k_smegemm PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
 
 list(APPEND CP2K_SRCS_C "${CP2K_OFFLOAD_SRCS_C}" "${CP2K_MPIWRAP_SRCS_C}")
 
@@ -1578,7 +1591,7 @@ if(CP2K_ENABLE_CONSISTENCY_CHECKS)
     "${CP2K_GRID_SRCS_GPU};${CP2K_GRID_SRCS_HIP};${CP2K_DBM_SRCS_GPU};${CP2K_PW_SRCS_GPU}"
     "*.cu"
     "")
-  cp2k_compare_src_with_list("${CP2K_SRCS_CPP}" "*.cpp" "")
+  cp2k_compare_src_with_list("${CP2K_SRCS_CPP};${CP2K_SMEGEMM_SRCS_CPP}" "*.cpp" "")
   return()
 endif()
 
@@ -1623,6 +1636,11 @@ target_link_libraries(
             OpenMP::OpenMP_Fortran
             OpenMP::OpenMP_C
             OpenMP::OpenMP_CXX)
+
+if(CP2K_USE_SMEGEMM)
+  target_link_libraries(cp2k_linalg_libs INTERFACE
+                        $<BUILD_INTERFACE:cp2k_smegemm>)
+endif()
 
 if(CMAKE_HIP_PLATFORM MATCHES "amd")
   set(CP2K_GPU_PLATFORM_DFLAGS "__HIP_PLATFORM_AMD__")
@@ -1806,6 +1824,7 @@ target_compile_definitions(
     $<$<BOOL:${CP2K_USE_CUSOLVER_MP}>:__CUSOLVERMP>
     $<$<BOOL:${CP2K_USE_CRAY_PM_ENERGY}>:__CRAY_PM_ENERGY>
     $<$<BOOL:${CP2K_USE_CRAY_PM_ACCEL_ENERGY}>:__CRAY_PM_ACCEL_ENERGY>
+    $<$<BOOL:${CP2K_USE_SMEGEMM}>:__SMEGEMM>
     ${CP2K_GPU_DFLAGS})
 
 if(CP2K_USE_CUDA
@@ -1893,6 +1912,7 @@ add_executable(
               ${CP2K_DBM_SRCS_GPU} ${CP2K_OFFLOAD_SRCS_C})
 target_compile_definitions(
   dbm_miniapp PRIVATE $<$<BOOL:${CP2K_USE_LIBXSMM}>:__LIBXSMM>
+                      $<$<BOOL:${CP2K_USE_SMEGEMM}>:__SMEGEMM>
                       $<$<STREQUAL:"${CP2K_BLAS_VENDOR}","MKL">:__MKL>)
 
 if(CP2K_DISABLE_DBM_GPU)
@@ -1912,6 +1932,7 @@ foreach(__app grid_miniapp grid_unittest)
     ${CP2K_OFFLOAD_SRCS_C})
   target_compile_definitions(
     ${__app} PRIVATE $<$<BOOL:${CP2K_USE_LIBXSMM}>:__LIBXSMM>
+                     $<$<BOOL:${CP2K_USE_SMEGEMM}>:__SMEGEMM>
                      $<$<STREQUAL:"${CP2K_BLAS_VENDOR}","MKL">:__MKL>)
 
   if(CP2K_DISABLE_GRID_GPU)

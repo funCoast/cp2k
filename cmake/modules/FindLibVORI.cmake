@@ -28,6 +28,11 @@ if(NOT TARGET cp2k::VORI::vori)
   set_target_properties(
     cp2k::VORI::vori PROPERTIES INTERFACE_LINK_LIBRARIES
                                 "${CP2K_LIBVORI_LINK_LIBRARIES}")
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set_property(
+      TARGET cp2k::VORI::vori APPEND PROPERTY INTERFACE_LINK_LIBRARIES
+                                                stdc++)
+  endif()
   if(CP2K_LIBVORI_INCLUDE_DIRS)
     set_target_properties(
       cp2k::VORI::vori PROPERTIES INTERFACE_INCLUDE_DIRECTORIES

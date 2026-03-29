@@ -168,6 +168,9 @@ cmake_dependent_option(CP2K_USE_MIMIC "Enable MIMIC support"
 cmake_dependent_option(
   CP2K_USE_LIBXSMM "Enable libxsmm support" ${CP2K_USE_EVERYTHING}
   "NOT CP2K_USE_ACCEL MATCHES \"OPENCL\"" ON)
+cmake_dependent_option(
+  CP2K_USE_SMEGEMM "Enable SME-GEMM-dev support" ${CP2K_USE_EVERYTHING}
+  "CMAKE_SYSTEM_PROCESSOR MATCHES \"arm64|aarch64\"" OFF)
 cmake_dependent_option(CP2K_USE_LIBVDWXC "Enable libvdwxc support with SIRIUS"
                        ${CP2K_USE_EVERYTHING} "CP2K_USE_SIRIUS" OFF)
 
@@ -437,6 +440,20 @@ find_package(Lapack REQUIRED) # also calls find_package(BLAS)
 if(CP2K_USE_LIBXSMM)
   find_package(LibXSMM REQUIRED)
   message(STATUS "Using LIBXSMM for Small Matrix Multiplication")
+endif()
+
+if(CP2K_USE_SMEGEMM)
+  set(COSTMODEL_AUTOGEN
+      OFF
+      CACHE BOOL "Disable SME-GEMM-dev benchmark autogen inside CP2K" FORCE)
+  set(SME_GEMM_BUILD_THIRDPARTY
+      OFF
+      CACHE BOOL "Disable SME-GEMM-dev third-party bootstrap inside CP2K" FORCE)
+  set(SME_GEMM_BUILD_TESTS
+      OFF
+      CACHE BOOL "Disable SME-GEMM-dev tests inside CP2K" FORCE)
+  add_subdirectory(SME-GEMM-dev ${CMAKE_BINARY_DIR}/SME-GEMM-dev EXCLUDE_FROM_ALL)
+  message(STATUS "Using SME-GEMM-dev for Small Matrix Multiplication")
 endif()
 
 # in practice it is always for any decent configuration. But I add a flags to
@@ -746,7 +763,11 @@ if(CP2K_USE_SPGLIB)
 endif()
 
 if(CP2K_USE_LIBSMEAGOL)
-  find_package(libsmeagol REQUIRED)
+  find_package(libsmeagol QUIET)
+  if(NOT libsmeagol_FOUND)
+    message(STATUS "LibSMEAGOL not found, disabling CP2K_USE_LIBSMEAGOL")
+    set(CP2K_USE_LIBSMEAGOL OFF)
+  endif()
 endif()
 
 if(CP2K_USE_SPLA)
@@ -1003,6 +1024,10 @@ if(CP2K_USE_LIBXSMM)
   )
 endif()
 
+if(CP2K_USE_SMEGEMM)
+  message("  - SME-GEMM-dev\n" "    - source tree: ${CMAKE_SOURCE_DIR}/SME-GEMM-dev\n\n")
+endif()
+
 if(CP2K_USE_SPLA)
   message(" - SpLA\n" # keep line break
           "   - include directories: ${CP2K_SPLA_INCLUDE_DIRS}\n"
@@ -1176,6 +1201,10 @@ endif()
 
 if(NOT CP2K_USE_LIBXSMM)
   message("   - LIBXSMM")
+endif()
+
+if(NOT CP2K_USE_SMEGEMM)
+  message("   - SME-GEMM-dev")
 endif()
 
 if(NOT CP2K_USE_LIBINT2)
