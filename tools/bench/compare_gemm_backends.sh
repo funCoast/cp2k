@@ -110,12 +110,35 @@ PY
   echo "  -> ${comparison}"
 fi
 
+summary_file="$log_root/summary.txt"
+cat >"$summary_file" <<EOF
+Run directory: $log_root
+LIBXSMM:
+  status:        ${RESULT_LIBXSMM_STATUS:-unknown}
+  total tests:   ${RESULT_LIBXSMM_TOTAL:-unknown}
+  correct tests: ${RESULT_LIBXSMM_CORRECT:-unknown}
+  failed tests:  ${RESULT_LIBXSMM_FAILED:-unknown}
+  wrong tests:   ${RESULT_LIBXSMM_WRONG:-unknown}
+  wall time:     ${RESULT_LIBXSMM_SECONDS:-unknown}s
+SME:
+  status:        ${RESULT_SME_STATUS:-unknown}
+  total tests:   ${RESULT_SME_TOTAL:-unknown}
+  correct tests: ${RESULT_SME_CORRECT:-unknown}
+  failed tests:  ${RESULT_SME_FAILED:-unknown}
+  wrong tests:   ${RESULT_SME_WRONG:-unknown}
+  wall time:     ${RESULT_SME_SECONDS:-unknown}s
+Comparison:
+  ${comparison:-unknown}
+EOF
+
 cat <<EOF
 
 Done.
 Logs:
   $log_root/LIBXSMM.log
   $log_root/SME.log
+Summary:
+  $summary_file
 EOF
 
 exit "$overall_rc"
