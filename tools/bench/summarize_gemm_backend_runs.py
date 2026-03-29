@@ -188,7 +188,7 @@ def find_summary_text(summary: dict[str, dict[str, str] | str]) -> Optional[str]
     return None
 
 
-def print_snapshot(run_dir: Path) -> bool:
+def load_reports(run_dir: Path) -> tuple[list[BackendReport], dict[str, dict[str, str] | str]]:
     summary_path = run_dir / "summary.txt"
     summary = parse_summary_file(summary_path)
 
@@ -198,57 +198,50 @@ def print_snapshot(run_dir: Path) -> bool:
         report = apply_summary(report, summary)
         reports.append(report)
 
+    return reports, summary
+
+def summarize_winner(libxsmm: BackendReport, sme: BackendReport, summary: dict[str, dict[str, str] | str]) -> str:
+    comparison = find_summary_text(summary)
+    if comparison:
+        return comparison
+
+    if libxsmm.wall_time and sme.wall_time:
+        try:
+            lib_time = float(libxsmm.wall_time.rstrip("s"))
+            sme_time = float(sme.wall_time.rstrip("s"))
+            delta = sme_time - lib_time
+            pct = (delta / lib_time * 100.0) if lib_time else 0.0
+            if delta < 0:
+                return f"SME is faster by {-delta:.2f}s ({-pct:.1f}%)"
+            if delta > 0:
+                return f"SME is slower by {delta:.2f}s ({pct:.1f}%)"
+            return "SME and LIBXSMM have identical wall time"
+        except ValueError:
+            pass
+    return "Comparison not available"
+
+
+def print_final_summary(run_dir: Path) -> bool:
+    reports, summary = load_reports(run_dir)
+    summary_path = run_dir / "summary.txt"
     both_done = all(r.state == "completed" for r in reports)
 
     print(f"Run directory: {run_dir}")
     print(f"Summary file: {summary_path if summary_path.exists() else 'not yet written'}")
-    print()
 
-    for report in reports:
-        print(f"{report.name}:")
-        print(f"  state:        {report.state}")
-        print(f"  log:          {report.log_path}")
-        if report.launched_dirs is not None:
-            print(f"  launched dirs:{report.launched_dirs:>8}")
-        if report.completed_dirs is not None:
-            total = report.launched_dirs if report.launched_dirs is not None else "?"
-            print(f"  completed dirs:{report.completed_dirs:>8} / {total}")
-        if report.last_completed_workdir:
-            print(f"  last done:    {report.last_completed_workdir}")
-        print(f"  status:       {report.status or 'unknown'}")
-        print(f"  total tests:  {report.total_tests if report.total_tests is not None else 'unknown'}")
-        print(f"  correct:      {report.correct_tests if report.correct_tests is not None else 'unknown'}")
-        print(f"  failed:       {report.failed_tests if report.failed_tests is not None else 'unknown'}")
-        print(f"  wrong:        {report.wrong_tests if report.wrong_tests is not None else 'unknown'}")
-        print(f"  wall time:    {report.wall_time or 'unknown'}")
-        print()
+    if not both_done:
+        print("Status: incomplete")
+        for report in reports:
+            print(f"{report.name}: {report.state}")
+        return False
 
-    comparison = find_summary_text(summary)
-    if comparison:
-        print(f"Comparison: {comparison}")
-    else:
-        libxsmm = next((r for r in reports if r.name == "LIBXSMM"), None)
-        sme = next((r for r in reports if r.name == "SME"), None)
-        if libxsmm and sme and libxsmm.wall_time and sme.wall_time:
-            try:
-                lib_time = float(libxsmm.wall_time.rstrip("s"))
-                sme_time = float(sme.wall_time.rstrip("s"))
-                delta = sme_time - lib_time
-                pct = (delta / lib_time * 100.0) if lib_time else 0.0
-                if delta < 0:
-                    comparison = f"SME is faster by {-delta:.2f}s ({-pct:.1f}%)"
-                elif delta > 0:
-                    comparison = f"SME is slower by {delta:.2f}s ({pct:.1f}%)"
-                else:
-                    comparison = "SME and LIBXSMM have identical wall time"
-            except ValueError:
-                comparison = None
-        if comparison:
-            print(f"Comparison: {comparison}")
-        else:
-            print("Comparison: not available yet")
+    libxsmm = next(r for r in reports if r.name == "LIBXSMM")
+    sme = next(r for r in reports if r.name == "SME")
 
-    return both_done
+    print(f"LIBXSMM: {libxsmm.wall_time or 'unknown'}")
+    print(f"SME:     {sme.wall_time or 'unknown'}")
+    print(f"Comparison: {summarize_winner(libxsmm, sme, summary)}")
+    return True
 
 
 def main() -> int:
@@ -256,18 +249,12 @@ def main() -> int:
     run_dir = resolve_run_dir(args.run_dir)
 
     if not args.watch:
-        print_snapshot(run_dir)
-        return 0
+        return 0 if print_final_summary(run_dir) else 2
 
     try:
         while True:
             print("\033[2J\033[H", end="")
-            print_snapshot(run_dir)
-            if all((run_dir / f"{backend}.log").exists() for backend in BACKENDS):
-                # Keep watching until both logs contain a terminal status.
-                reports = [parse_backend_log(run_dir / f"{backend}.log") for backend in BACKENDS]
-                reports = [apply_summary(r, parse_summary_file(run_dir / "summary.txt")) for r in reports]
-                if all(r.state == "completed" for r in reports):
+            if print_final_summary(run_dir):
                     return 0
             sys.stdout.flush()
             time.sleep(args.interval)
