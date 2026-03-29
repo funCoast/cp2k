@@ -4,7 +4,9 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 build_bin_dir="${1:-$root_dir/build-sme/bin}"
 cp2k_version="${2:-psmp}"
-log_root="${3:-$root_dir/bench-logs/$(date +%Y%m%d-%H%M%S)}"
+log_base="${3:-$root_dir/bench-logs}"
+run_stamp="$(date +%Y%m%d-%H%M%S)"
+log_root=""
 
 cd "$root_dir"
 
@@ -15,14 +17,15 @@ if [[ ! -x "$cp2k_exe" ]]; then
   exit 1
 fi
 
+mkdir -p "$log_base"
+log_root="$(mktemp -d "${log_base%/}/run-${run_stamp}-XXXXXX")"
+
 # Reuse the installed toolchain and keep the runtime environment stable.
 . tools/toolchain/install/setup >/dev/null 2>&1
 export PATH="/opt/homebrew/bin:$PATH"
 export CP2K_DATA_DIR="$root_dir/data"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-2}"
 export CP2K_GEMM_DEBUG="${CP2K_GEMM_DEBUG:-0}"
-
-mkdir -p "$log_root"
 
 run_suite() {
   local backend="$1"
