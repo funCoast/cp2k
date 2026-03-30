@@ -158,12 +158,19 @@ static int dbm_multiply_cpu_process_sme_group(
   // semantics.
   const size_t scratch_elems =
       (size_t)ngroup * (size_t)task0.m * (size_t)task0.n;
+  const size_t a_block_elems = (size_t)task0.m * (size_t)task0.k;
+  const size_t b_block_elems = (size_t)task0.n * (size_t)task0.k;
   double *const scratch = malloc(scratch_elems * sizeof(double));
+  double *const a_scratch = malloc((size_t)ngroup * a_block_elems * sizeof(double));
+  double *const b_scratch = malloc((size_t)ngroup * b_block_elems * sizeof(double));
   const double **a_array = malloc((size_t)ngroup * sizeof(double *));
   const double **b_array = malloc((size_t)ngroup * sizeof(double *));
   double **c_array = malloc((size_t)ngroup * sizeof(double *));
-  if (scratch == NULL || a_array == NULL || b_array == NULL || c_array == NULL) {
+  if (scratch == NULL || a_scratch == NULL || b_scratch == NULL ||
+      a_array == NULL || b_array == NULL || c_array == NULL) {
     free(scratch);
+    free(a_scratch);
+    free(b_scratch);
     free((void *)a_array);
     free((void *)b_array);
     free(c_array);
@@ -172,8 +179,12 @@ static int dbm_multiply_cpu_process_sme_group(
 
   for (int i = 0; i < ngroup; ++i) {
     const dbm_task_t task = group[i];
-    a_array[i] = pack_a->data + task.offset_a;
-    b_array[i] = pack_b->data + task.offset_b;
+    double *const a_dst = a_scratch + ((size_t)i * a_block_elems);
+    double *const b_dst = b_scratch + ((size_t)i * b_block_elems);
+    memcpy(a_dst, pack_a->data + task.offset_a, a_block_elems * sizeof(double));
+    memcpy(b_dst, pack_b->data + task.offset_b, b_block_elems * sizeof(double));
+    a_array[i] = a_dst;
+    b_array[i] = b_dst;
     c_array[i] = scratch + ((size_t)i * (size_t)task0.m * (size_t)task0.n);
   }
 
@@ -191,6 +202,8 @@ static int dbm_multiply_cpu_process_sme_group(
       fallback_backend);
   if (!ok) {
     free(scratch);
+    free(a_scratch);
+    free(b_scratch);
     free((void *)a_array);
     free((void *)b_array);
     free(c_array);
@@ -205,6 +218,8 @@ static int dbm_multiply_cpu_process_sme_group(
   }
 
   free(scratch);
+  free(a_scratch);
+  free(b_scratch);
   free((void *)a_array);
   free((void *)b_array);
   free(c_array);
