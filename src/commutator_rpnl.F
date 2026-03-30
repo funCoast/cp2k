@@ -46,6 +46,9 @@ MODULE commutator_rpnl
                                               release_sap_int,&
                                               sap_int_type,&
                                               sap_sort
+   USE sme_batch_bridge,                ONLY: sme_batch_try_dgemm_colmajor_strided,&
+                                              sme_batch_wants_sme
+   USE, INTRINSIC :: ISO_C_BINDING,     ONLY: c_loc, c_ptr
 
 !$ USE OMP_LIB, ONLY: omp_get_max_threads, omp_get_thread_num, omp_get_num_threads
 !$ USE OMP_LIB, ONLY: omp_lock_kind, &
@@ -90,15 +93,19 @@ CONTAINS
       INTEGER, DIMENSION(:), POINTER                     :: la_max, la_min, npgfa, nprj_ppnl, &
                                                             nsgf_seta
       INTEGER, DIMENSION(:, :), POINTER                  :: first_sgfa
-      LOGICAL                                            :: found, gpot, ppnl_present, spot
+      LOGICAL                                            :: found, gpot, ppnl_present, sme_ok, spot
       REAL(KIND=dp)                                      :: dac, ppnl_radius
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: ai_work, sab, work
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: ai_work
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :), TARGET :: sab, work
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :), TARGET :: h_scratch
       REAL(KIND=dp), DIMENSION(1)                        :: rprjc, zetc
       REAL(KIND=dp), DIMENSION(3)                        :: rab, rac
       REAL(KIND=dp), DIMENSION(:), POINTER               :: alpha_ppnl, set_radius_a
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: cprj, rpgfa, sphi_a, vprj_ppnl, x_block, &
                                                             y_block, z_block, zeta
       REAL(KIND=dp), DIMENSION(:, :, :), POINTER         :: achint, acint, bchint, bcint
+      TYPE(C_PTR), DIMENSION(6)                          :: a_batch_ptrs6, b_batch_ptrs6, c_batch_ptrs6
+      TYPE(C_PTR), DIMENSION(4)                          :: a_batch_ptrs4, b_batch_ptrs4, c_batch_ptrs4
       TYPE(alist_type), POINTER                          :: alist_ac, alist_bc
       TYPE(clist_type), POINTER                          :: clist
       TYPE(gth_potential_p_type), DIMENSION(:), POINTER  :: gpotential
@@ -177,7 +184,8 @@ CONTAINS
 !$OMP          sphi_a, zeta, cprj, lppnl, nppnl, nprj_ppnl, &
 !$OMP          clist, iset, ncoa, sgfa, prjc, work, sab, ai_work, nprjc,  ppnl_radius, &
 !$OMP          ncoc, rpgfa, vprj_ppnl, i, l, gpot, spot, &
-!$OMP          set_radius_a, rprjc, dac, lc_max, lc_min, zetc, alpha_ppnl)
+!$OMP          set_radius_a, rprjc, dac, lc_max, lc_min, zetc, alpha_ppnl, sme_ok, &
+!$OMP          a_batch_ptrs4, b_batch_ptrs4, c_batch_ptrs4)
          mepos = 0
 !$       mepos = omp_get_thread_num()
 
@@ -274,20 +282,59 @@ CONTAINS
                   CALL moment(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset), &
                               lc_max, 1, zetc, rprjc, 1, rac, [0._dp, 0._dp, 0._dp], sab(:, :, 2:4))
                   ! *** Transformation step projector functions (cartesian->spherical) ***
-                  DO i = 1, maxder
-                     CALL dgemm("N", "N", ncoa, nprjc, ncoc, 1.0_dp, sab(1, 1, i), ldsab, &
-                                cprj(1, prjc), SIZE(cprj, 1), 0.0_dp, work(1, 1, i), ldsab)
-                  END DO
+                  sme_ok = .FALSE.
+                  IF (sme_batch_wants_sme(maxder)) THEN
+                     DO i = 1, maxder
+                        a_batch_ptrs4(i) = c_loc(sab(1, 1, i))
+                        b_batch_ptrs4(i) = c_loc(cprj(1, prjc))
+                        c_batch_ptrs4(i) = c_loc(work(1, 1, i))
+                     END DO
+                     CALL sme_batch_try_dgemm_colmajor_strided("N", "N", ncoa, nprjc, ncoc, maxder, &
+                                                               a_batch_ptrs4, ldsab, &
+                                                               b_batch_ptrs4, SIZE(cprj, 1), &
+                                                               c_batch_ptrs4, ldsab, 1.0_dp, .FALSE., sme_ok)
+                  END IF
+                  IF (.NOT. sme_ok) THEN
+                     DO i = 1, maxder
+                        CALL dgemm("N", "N", ncoa, nprjc, ncoc, 1.0_dp, sab(1, 1, i), ldsab, &
+                                   cprj(1, prjc), SIZE(cprj, 1), 0.0_dp, work(1, 1, i), ldsab)
+                     END DO
+                  END IF
                   prjc = prjc + nprjc
                END DO
-               DO i = 1, maxder
-                  ! Contraction step (basis functions)
-                  CALL dgemm("T", "N", nsgf_seta(iset), nppnl, ncoa, 1.0_dp, sphi_a(1, sgfa), SIZE(sphi_a, 1), &
-                             work(1, 1, i), ldsab, 0.0_dp, clist%acint(sgfa, 1, i), nsgfa)
-                  ! Multiply with interaction matrix(h)
-                  CALL dgemm("N", "N", nsgf_seta(iset), nppnl, nppnl, 1.0_dp, clist%acint(sgfa, 1, i), nsgfa, &
-                             vprj_ppnl(1, 1), SIZE(vprj_ppnl, 1), 0.0_dp, clist%achint(sgfa, 1, i), nsgfa)
-               END DO
+               sme_ok = .FALSE.
+               IF (sme_batch_wants_sme(maxder)) THEN
+                  DO i = 1, maxder
+                     a_batch_ptrs4(i) = c_loc(sphi_a(1, sgfa))
+                     b_batch_ptrs4(i) = c_loc(work(1, 1, i))
+                     c_batch_ptrs4(i) = c_loc(clist%acint(sgfa, 1, i))
+                  END DO
+                  CALL sme_batch_try_dgemm_colmajor_strided("T", "N", nsgf_seta(iset), nppnl, ncoa, maxder, &
+                                                            a_batch_ptrs4, SIZE(sphi_a, 1), &
+                                                            b_batch_ptrs4, ldsab, &
+                                                            c_batch_ptrs4, nsgfa, 1.0_dp, .FALSE., sme_ok)
+                  IF (sme_ok) THEN
+                     DO i = 1, maxder
+                        a_batch_ptrs4(i) = c_loc(clist%acint(sgfa, 1, i))
+                        b_batch_ptrs4(i) = c_loc(vprj_ppnl(1, 1))
+                        c_batch_ptrs4(i) = c_loc(clist%achint(sgfa, 1, i))
+                     END DO
+                     CALL sme_batch_try_dgemm_colmajor_strided("N", "N", nsgf_seta(iset), nppnl, nppnl, maxder, &
+                                                               a_batch_ptrs4, nsgfa, &
+                                                               b_batch_ptrs4, SIZE(vprj_ppnl, 1), &
+                                                               c_batch_ptrs4, nsgfa, 1.0_dp, .FALSE., sme_ok)
+                  END IF
+               END IF
+               IF (.NOT. sme_ok) THEN
+                  DO i = 1, maxder
+                     ! Contraction step (basis functions)
+                     CALL dgemm("T", "N", nsgf_seta(iset), nppnl, ncoa, 1.0_dp, sphi_a(1, sgfa), SIZE(sphi_a, 1), &
+                                work(1, 1, i), ldsab, 0.0_dp, clist%acint(sgfa, 1, i), nsgfa)
+                     ! Multiply with interaction matrix(h)
+                     CALL dgemm("N", "N", nsgf_seta(iset), nppnl, nppnl, 1.0_dp, clist%acint(sgfa, 1, i), nsgfa, &
+                                vprj_ppnl(1, 1), SIZE(vprj_ppnl, 1), 0.0_dp, clist%achint(sgfa, 1, i), nsgfa)
+                  END DO
+               END IF
             END DO
             clist%maxac = MAXVAL(ABS(clist%acint(:, :, 1)))
             clist%maxach = MAXVAL(ABS(clist%achint(:, :, 1)))
@@ -310,7 +357,8 @@ CONTAINS
 !$OMP PRIVATE (mepos, ikind, jkind, iatom, jatom, nlist, ilist, nnode, inode, cell_b, rab, &
 !$OMP          iab, irow, icol, x_block, y_block, z_block, &
 !$OMP          found, iac, ibc, alist_ac, alist_bc, acint, bcint, &
-!$OMP          achint, bchint, na, np, nb, katom, rac, kkind, kac, kbc, i)
+!$OMP          achint, bchint, na, np, nb, katom, rac, kkind, kac, kbc, i, sme_ok, h_scratch, &
+!$OMP          a_batch_ptrs6, b_batch_ptrs6, c_batch_ptrs6)
 
          mepos = 0
 !$       mepos = omp_get_thread_num()
@@ -357,39 +405,100 @@ CONTAINS
                            na = SIZE(acint, 1)
                            np = SIZE(acint, 2)
                            nb = SIZE(bcint, 1)
-!$OMP CRITICAL(h_block_critical)
+                           sme_ok = .FALSE.
                            IF (iatom <= jatom) THEN
-                              ! Vnl*r
-                              CALL dgemm("N", "T", na, nb, np, 1._dp, achint(1, 1, 1), na, &
-                                         bcint(1, 1, 2), nb, 1.0_dp, x_block, SIZE(x_block, 1))
-                              CALL dgemm("N", "T", na, nb, np, 1._dp, achint(1, 1, 1), na, &
-                                         bcint(1, 1, 3), nb, 1.0_dp, y_block, SIZE(y_block, 1))
-                              CALL dgemm("N", "T", na, nb, np, 1._dp, achint(1, 1, 1), na, &
-                                         bcint(1, 1, 4), nb, 1.0_dp, z_block, SIZE(z_block, 1))
-                              ! -r*Vnl
-                              CALL dgemm("N", "T", na, nb, np, -1._dp, achint(1, 1, 2), na, &
-                                         bcint(1, 1, 1), nb, 1.0_dp, x_block, SIZE(x_block, 1))
-                              CALL dgemm("N", "T", na, nb, np, -1._dp, achint(1, 1, 3), na, &
-                                         bcint(1, 1, 1), nb, 1.0_dp, y_block, SIZE(y_block, 1))
-                              CALL dgemm("N", "T", na, nb, np, -1._dp, achint(1, 1, 4), na, &
-                                         bcint(1, 1, 1), nb, 1.0_dp, z_block, SIZE(z_block, 1))
-                           ELSE
-                              ! Vnl*r
-                              CALL dgemm("N", "T", nb, na, np, 1.0_dp, bchint(1, 1, 2), nb, &
-                                         acint(1, 1, 1), na, 1.0_dp, x_block, SIZE(x_block, 1))
-                              CALL dgemm("N", "T", nb, na, np, 1.0_dp, bchint(1, 1, 3), nb, &
-                                         acint(1, 1, 1), na, 1.0_dp, y_block, SIZE(y_block, 1))
-                              CALL dgemm("N", "T", nb, na, np, 1.0_dp, bchint(1, 1, 4), nb, &
-                                         acint(1, 1, 1), na, 1.0_dp, z_block, SIZE(z_block, 1))
-                              ! -r*Vnl
-                              CALL dgemm("N", "T", nb, na, np, -1.0_dp, bchint(1, 1, 1), nb, &
-                                         acint(1, 1, 2), na, 1.0_dp, x_block, SIZE(x_block, 1))
-                              CALL dgemm("N", "T", nb, na, np, -1.0_dp, bchint(1, 1, 1), nb, &
-                                         acint(1, 1, 3), na, 1.0_dp, y_block, SIZE(y_block, 1))
-                              CALL dgemm("N", "T", nb, na, np, -1.0_dp, bchint(1, 1, 1), nb, &
-                                         acint(1, 1, 4), na, 1.0_dp, z_block, SIZE(z_block, 1))
-                           END IF
+                              IF (sme_batch_wants_sme(6)) THEN
+                                 ALLOCATE (h_scratch(na, nb, 6))
+                                 DO i = 1, 6
+                                    c_batch_ptrs6(i) = c_loc(h_scratch(1, 1, i))
+                                 END DO
+                                 a_batch_ptrs6(1) = c_loc(achint(1, 1, 1))
+                                 a_batch_ptrs6(2) = c_loc(achint(1, 1, 1))
+                                 a_batch_ptrs6(3) = c_loc(achint(1, 1, 1))
+                                 a_batch_ptrs6(4) = c_loc(achint(1, 1, 2))
+                                 a_batch_ptrs6(5) = c_loc(achint(1, 1, 3))
+                                 a_batch_ptrs6(6) = c_loc(achint(1, 1, 4))
+                                 b_batch_ptrs6(1) = c_loc(bcint(1, 1, 2))
+                                 b_batch_ptrs6(2) = c_loc(bcint(1, 1, 3))
+                                 b_batch_ptrs6(3) = c_loc(bcint(1, 1, 4))
+                                 b_batch_ptrs6(4) = c_loc(bcint(1, 1, 1))
+                                 b_batch_ptrs6(5) = c_loc(bcint(1, 1, 1))
+                                 b_batch_ptrs6(6) = c_loc(bcint(1, 1, 1))
+                                 CALL sme_batch_try_dgemm_colmajor_strided("N", "T", na, nb, np, 6, &
+                                                                           a_batch_ptrs6, na, &
+                                                                           b_batch_ptrs6, nb, &
+                                                                           c_batch_ptrs6, na, 1.0_dp, .FALSE., sme_ok)
+                              END IF
+!$OMP CRITICAL(h_block_critical)
+                              IF (sme_ok) THEN
+                                 x_block(1:na, 1:nb) = x_block(1:na, 1:nb) + h_scratch(1:na, 1:nb, 1) - h_scratch(1:na, 1:nb, 4)
+                                 y_block(1:na, 1:nb) = y_block(1:na, 1:nb) + h_scratch(1:na, 1:nb, 2) - h_scratch(1:na, 1:nb, 5)
+                                 z_block(1:na, 1:nb) = z_block(1:na, 1:nb) + h_scratch(1:na, 1:nb, 3) - h_scratch(1:na, 1:nb, 6)
+                              ELSE
+                                 ! Vnl*r
+                                 CALL dgemm("N", "T", na, nb, np, 1._dp, achint(1, 1, 1), na, &
+                                            bcint(1, 1, 2), nb, 1.0_dp, x_block, SIZE(x_block, 1))
+                                 CALL dgemm("N", "T", na, nb, np, 1._dp, achint(1, 1, 1), na, &
+                                            bcint(1, 1, 3), nb, 1.0_dp, y_block, SIZE(y_block, 1))
+                                 CALL dgemm("N", "T", na, nb, np, 1._dp, achint(1, 1, 1), na, &
+                                            bcint(1, 1, 4), nb, 1.0_dp, z_block, SIZE(z_block, 1))
+                                 ! -r*Vnl
+                                 CALL dgemm("N", "T", na, nb, np, -1._dp, achint(1, 1, 2), na, &
+                                            bcint(1, 1, 1), nb, 1.0_dp, x_block, SIZE(x_block, 1))
+                                 CALL dgemm("N", "T", na, nb, np, -1._dp, achint(1, 1, 3), na, &
+                                            bcint(1, 1, 1), nb, 1.0_dp, y_block, SIZE(y_block, 1))
+                                 CALL dgemm("N", "T", na, nb, np, -1._dp, achint(1, 1, 4), na, &
+                                            bcint(1, 1, 1), nb, 1.0_dp, z_block, SIZE(z_block, 1))
+                              END IF
 !$OMP END CRITICAL(h_block_critical)
+                              IF (ALLOCATED(h_scratch)) DEALLOCATE (h_scratch)
+                           ELSE
+                              IF (sme_batch_wants_sme(6)) THEN
+                                 ALLOCATE (h_scratch(nb, na, 6))
+                                 DO i = 1, 6
+                                    c_batch_ptrs6(i) = c_loc(h_scratch(1, 1, i))
+                                 END DO
+                                 a_batch_ptrs6(1) = c_loc(bchint(1, 1, 2))
+                                 a_batch_ptrs6(2) = c_loc(bchint(1, 1, 3))
+                                 a_batch_ptrs6(3) = c_loc(bchint(1, 1, 4))
+                                 a_batch_ptrs6(4) = c_loc(bchint(1, 1, 1))
+                                 a_batch_ptrs6(5) = c_loc(bchint(1, 1, 1))
+                                 a_batch_ptrs6(6) = c_loc(bchint(1, 1, 1))
+                                 b_batch_ptrs6(1) = c_loc(acint(1, 1, 1))
+                                 b_batch_ptrs6(2) = c_loc(acint(1, 1, 1))
+                                 b_batch_ptrs6(3) = c_loc(acint(1, 1, 1))
+                                 b_batch_ptrs6(4) = c_loc(acint(1, 1, 2))
+                                 b_batch_ptrs6(5) = c_loc(acint(1, 1, 3))
+                                 b_batch_ptrs6(6) = c_loc(acint(1, 1, 4))
+                                 CALL sme_batch_try_dgemm_colmajor_strided("N", "T", nb, na, np, 6, &
+                                                                           a_batch_ptrs6, nb, &
+                                                                           b_batch_ptrs6, na, &
+                                                                           c_batch_ptrs6, nb, 1.0_dp, .FALSE., sme_ok)
+                              END IF
+!$OMP CRITICAL(h_block_critical)
+                              IF (sme_ok) THEN
+                                 x_block(1:nb, 1:na) = x_block(1:nb, 1:na) + h_scratch(1:nb, 1:na, 1) - h_scratch(1:nb, 1:na, 4)
+                                 y_block(1:nb, 1:na) = y_block(1:nb, 1:na) + h_scratch(1:nb, 1:na, 2) - h_scratch(1:nb, 1:na, 5)
+                                 z_block(1:nb, 1:na) = z_block(1:nb, 1:na) + h_scratch(1:nb, 1:na, 3) - h_scratch(1:nb, 1:na, 6)
+                              ELSE
+                                 ! Vnl*r
+                                 CALL dgemm("N", "T", nb, na, np, 1.0_dp, bchint(1, 1, 2), nb, &
+                                            acint(1, 1, 1), na, 1.0_dp, x_block, SIZE(x_block, 1))
+                                 CALL dgemm("N", "T", nb, na, np, 1.0_dp, bchint(1, 1, 3), nb, &
+                                            acint(1, 1, 1), na, 1.0_dp, y_block, SIZE(y_block, 1))
+                                 CALL dgemm("N", "T", nb, na, np, 1.0_dp, bchint(1, 1, 4), nb, &
+                                            acint(1, 1, 1), na, 1.0_dp, z_block, SIZE(z_block, 1))
+                                 ! -r*Vnl
+                                 CALL dgemm("N", "T", nb, na, np, -1.0_dp, bchint(1, 1, 1), nb, &
+                                            acint(1, 1, 2), na, 1.0_dp, x_block, SIZE(x_block, 1))
+                                 CALL dgemm("N", "T", nb, na, np, -1.0_dp, bchint(1, 1, 1), nb, &
+                                            acint(1, 1, 3), na, 1.0_dp, y_block, SIZE(y_block, 1))
+                                 CALL dgemm("N", "T", nb, na, np, -1.0_dp, bchint(1, 1, 1), nb, &
+                                            acint(1, 1, 4), na, 1.0_dp, z_block, SIZE(z_block, 1))
+                              END IF
+!$OMP END CRITICAL(h_block_critical)
+                              IF (ALLOCATED(h_scratch)) DEALLOCATE (h_scratch)
+                           END IF
                            EXIT ! We have found a match and there can be only one single match
                         END IF
                      END DO

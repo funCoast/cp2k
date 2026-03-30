@@ -425,6 +425,7 @@ list(
   nnp_force.F
   nnp_model.F
   local_gemm_api.F
+  sme_batch_bridge.F
   offload/offload_api.F
   optbas_fenv_manipulation.F
   optbas_opt_utils.F

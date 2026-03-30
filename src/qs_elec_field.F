@@ -44,6 +44,9 @@ MODULE qs_elec_field
                                               neighbor_list_iterator_p_type,&
                                               neighbor_list_iterator_release,&
                                               neighbor_list_set_p_type
+   USE sme_batch_bridge,                ONLY: sme_batch_try_dgemm_colmajor_strided,&
+                                              sme_batch_wants_sme
+   USE, INTRINSIC :: ISO_C_BINDING,     ONLY: c_loc, c_ptr
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -85,10 +88,12 @@ CONTAINS
       INTEGER, DIMENSION(:), POINTER                     :: la_max, la_min, lb_max, lb_min, npgfa, &
                                                             npgfb, nsgfa, nsgfb
       INTEGER, DIMENSION(:, :), POINTER                  :: first_sgfa, first_sgfb
-      LOGICAL                                            :: found, new_atom_b, omit_headers
+      LOGICAL                                            :: found, new_atom_b, omit_headers, sme_ok
       REAL(KIND=dp)                                      :: dab, rab2
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: work
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: efgab, rr_work
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :), TARGET :: work
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :), TARGET :: efgab
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: rr_work
+      TYPE(C_PTR), DIMENSION(6)                          :: a_batch_ptrs, b_batch_ptrs, c_batch_ptrs
       REAL(KIND=dp), DIMENSION(3)                        :: ra, rab, rac, rb, rbc
       REAL(KIND=dp), DIMENSION(:), POINTER               :: set_radius_a, set_radius_b
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: rpgfa, rpgfb, sphi_a, sphi_b, zeta, zetb
@@ -137,13 +142,13 @@ CONTAINS
 
       ALLOCATE (efgab(maxco, maxco, 6))
 
-      ALLOCATE (work(maxco, maxsgf))
+      ALLOCATE (work(maxco, maxsgf, 6))
 
       ALLOCATE (efgint(6))
 
       rr_work(:, :, :) = 0.0_dp
       efgab(:, :, :) = 0.0_dp
-      work(:, :) = 0.0_dp
+      work(:, :, :) = 0.0_dp
 
       ALLOCATE (basis_set_list(nkind))
       DO ikind = 1, nkind
@@ -240,30 +245,69 @@ CONTAINS
 
                ! *** Contraction step ***
 
-               DO i = 1, 6
-
-                  CALL dgemm("N", "N", ncoa, nsgfb(jset), ncob, &
-                             1.0_dp, efgab(1, 1, i), SIZE(efgab, 1), &
-                             sphi_b(1, sgfb), SIZE(sphi_b, 1), &
-                             0.0_dp, work(1, 1), SIZE(work, 1))
-
-                  IF (iatom <= jatom) THEN
-                     CALL dgemm("T", "N", nsgfa(iset), nsgfb(jset), ncoa, &
-                                1.0_dp, sphi_a(1, sgfa), SIZE(sphi_a, 1), &
-                                work(1, 1), SIZE(work, 1), &
-                                1.0_dp, efgint(i)%block(sgfa, sgfb), &
-                                SIZE(efgint(i)%block, 1))
-
-                  ELSE
-
-                     CALL dgemm("T", "N", nsgfb(jset), nsgfa(iset), ncoa, &
-                                1.0_dp, work(1, 1), SIZE(work, 1), &
-                                sphi_a(1, sgfa), SIZE(sphi_a, 1), &
-                                1.0_dp, efgint(i)%block(sgfb, sgfa), &
-                                SIZE(efgint(i)%block, 1))
+               sme_ok = .FALSE.
+               IF (sme_batch_wants_sme(6)) THEN
+                  DO i = 1, 6
+                     a_batch_ptrs(i) = c_loc(efgab(1, 1, i))
+                     b_batch_ptrs(i) = c_loc(sphi_b(1, sgfb))
+                     c_batch_ptrs(i) = c_loc(work(1, 1, i))
+                  END DO
+                  CALL sme_batch_try_dgemm_colmajor_strided("N", "N", ncoa, nsgfb(jset), ncob, 6, &
+                                                            a_batch_ptrs, SIZE(efgab, 1), &
+                                                            b_batch_ptrs, SIZE(sphi_b, 1), &
+                                                            c_batch_ptrs, SIZE(work, 1), 1.0_dp, .FALSE., sme_ok)
+                  IF (sme_ok) THEN
+                     DO i = 1, 6
+                        IF (iatom <= jatom) THEN
+                           a_batch_ptrs(i) = c_loc(sphi_a(1, sgfa))
+                           b_batch_ptrs(i) = c_loc(work(1, 1, i))
+                           c_batch_ptrs(i) = c_loc(efgint(i)%block(sgfa, sgfb))
+                        ELSE
+                           a_batch_ptrs(i) = c_loc(work(1, 1, i))
+                           b_batch_ptrs(i) = c_loc(sphi_a(1, sgfa))
+                           c_batch_ptrs(i) = c_loc(efgint(i)%block(sgfb, sgfa))
+                        END IF
+                     END DO
+                     IF (iatom <= jatom) THEN
+                        CALL sme_batch_try_dgemm_colmajor_strided("T", "N", nsgfa(iset), nsgfb(jset), ncoa, 6, &
+                                                                  a_batch_ptrs, SIZE(sphi_a, 1), &
+                                                                  b_batch_ptrs, SIZE(work, 1), &
+                                                                  c_batch_ptrs, SIZE(efgint(1)%block, 1), 1.0_dp, .TRUE., sme_ok)
+                     ELSE
+                        CALL sme_batch_try_dgemm_colmajor_strided("T", "N", nsgfb(jset), nsgfa(iset), ncoa, 6, &
+                                                                  a_batch_ptrs, SIZE(work, 1), &
+                                                                  b_batch_ptrs, SIZE(sphi_a, 1), &
+                                                                  c_batch_ptrs, SIZE(efgint(1)%block, 1), 1.0_dp, .TRUE., sme_ok)
+                     END IF
                   END IF
+               END IF
 
-               END DO
+               IF (.NOT. sme_ok) THEN
+                  DO i = 1, 6
+
+                     CALL dgemm("N", "N", ncoa, nsgfb(jset), ncob, &
+                                1.0_dp, efgab(1, 1, i), SIZE(efgab, 1), &
+                                sphi_b(1, sgfb), SIZE(sphi_b, 1), &
+                                0.0_dp, work(1, 1, i), SIZE(work, 1))
+
+                     IF (iatom <= jatom) THEN
+                        CALL dgemm("T", "N", nsgfa(iset), nsgfb(jset), ncoa, &
+                                   1.0_dp, sphi_a(1, sgfa), SIZE(sphi_a, 1), &
+                                   work(1, 1, i), SIZE(work, 1), &
+                                   1.0_dp, efgint(i)%block(sgfa, sgfb), &
+                                   SIZE(efgint(i)%block, 1))
+
+                     ELSE
+
+                        CALL dgemm("T", "N", nsgfb(jset), nsgfa(iset), ncoa, &
+                                   1.0_dp, work(1, 1, i), SIZE(work, 1), &
+                                   sphi_a(1, sgfa), SIZE(sphi_a, 1), &
+                                   1.0_dp, efgint(i)%block(sgfb, sgfa), &
+                                   SIZE(efgint(i)%block, 1))
+                     END IF
+
+                  END DO
+               END IF
 
             END DO
 
@@ -313,4 +357,3 @@ CONTAINS
 ! **************************************************************************************************
 
 END MODULE qs_elec_field
-

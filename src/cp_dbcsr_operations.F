@@ -44,6 +44,9 @@ MODULE cp_dbcsr_operations
    USE mathlib,                         ONLY: gcd,&
                                               lcm
    USE message_passing,                 ONLY: mp_para_env_type
+   USE sme_batch_bridge,                ONLY: sme_batch_try_dgemm_colmajor_strided,&
+                                              sme_batch_wants_sme
+   USE, INTRINSIC :: ISO_C_BINDING,     ONLY: c_f_pointer, c_loc, c_ptr
 
 !$ USE OMP_LIB, ONLY: omp_get_max_threads, omp_get_thread_num, omp_get_num_threads
 #include "base/base_uses.f90"
@@ -457,19 +460,23 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE dbcsr_multiply_local(matrix_a, vec_b, vec_c, ncol, alpha)
       TYPE(dbcsr_type), INTENT(IN)                       :: matrix_a
-      REAL(dp), DIMENSION(:, :), INTENT(IN)              :: vec_b
-      REAL(dp), DIMENSION(:, :), INTENT(INOUT)           :: vec_c
+      REAL(dp), DIMENSION(:, :), INTENT(IN), TARGET      :: vec_b
+      REAL(dp), DIMENSION(:, :), INTENT(INOUT), TARGET   :: vec_c
       INTEGER, INTENT(in), OPTIONAL                      :: ncol
       REAL(dp), INTENT(IN), OPTIONAL                     :: alpha
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'dbcsr_multiply_local'
 
-      INTEGER                                            :: col, coloff, my_ncol, row, rowoff, &
-                                                            timing_handle
+      INTEGER, PARAMETER                                 :: sme_queue_max = 32
+      INTEGER                                            :: batch_count, col, coloff, group_k, group_lda, &
+                                                            group_m, my_ncol, row, rowoff, timing_handle
       LOGICAL                                            :: has_symm
+      CHARACTER(LEN=1)                                   :: group_transa
       REAL(dp)                                           :: my_alpha, my_alpha2
       REAL(dp), DIMENSION(:, :), POINTER                 :: data_d
+      REAL(dp), DIMENSION(:, :), POINTER                 :: a_mat, b_mat, c_mat
       TYPE(dbcsr_iterator_type)                          :: iter
+      TYPE(C_PTR), DIMENSION(sme_queue_max)              :: a_batch_ptrs, b_batch_ptrs, c_batch_ptrs
 
       CALL timeset(routineN, timing_handle)
 
@@ -487,16 +494,34 @@ CONTAINS
                   dbcsr_get_matrix_type(matrix_a) == dbcsr_type_antisymmetric)
 
 !$OMP     PARALLEL DEFAULT(NONE) SHARED(matrix_a,vec_b,vec_c,ncol,my_alpha2,my_alpha,my_ncol,has_symm) &
-!$OMP              PRIVATE(iter,row,col,data_d,rowoff,coloff)
+!$OMP              PRIVATE(iter,row,col,data_d,rowoff,coloff,batch_count,group_m,group_k,group_lda, &
+!$OMP                      group_transa,a_batch_ptrs,b_batch_ptrs,c_batch_ptrs,a_mat,b_mat,c_mat)
+      batch_count = 0
+      group_m = 0
+      group_k = 0
+      group_lda = 0
+      group_transa = 'N'
       CALL dbcsr_iterator_readonly_start(iter, matrix_a, dynamic=.TRUE., dynamic_byrows=.TRUE.)
       DO WHILE (dbcsr_iterator_blocks_left(iter))
          CALL dbcsr_iterator_next_block(iter, row, col, data_d, row_offset=rowoff, col_offset=coloff)
          IF (my_ncol /= 1) THEN
-            CALL dgemm('N', 'N', &
-                       SIZE(data_d, 1), my_ncol, SIZE(data_d, 2), &
-                       my_alpha, data_d(1, 1), SIZE(data_d, 1), &
-                       vec_b(coloff, 1), SIZE(vec_b, 1), &
-                       1.0_dp, vec_c(rowoff, 1), SIZE(vec_c, 1))
+            IF (batch_count > 0 .AND. (SIZE(data_d, 1) /= group_m .OR. SIZE(data_d, 2) /= group_k .OR. &
+                                       SIZE(data_d, 1) /= group_lda .OR. group_transa /= 'N')) THEN
+               CALL flush_dbcsr_batch(batch_count, group_transa, group_m, group_k, group_lda, my_alpha)
+            END IF
+            IF (batch_count == sme_queue_max) THEN
+               CALL flush_dbcsr_batch(batch_count, group_transa, group_m, group_k, group_lda, my_alpha)
+            END IF
+            IF (batch_count == 0) THEN
+               group_transa = 'N'
+               group_m = SIZE(data_d, 1)
+               group_k = SIZE(data_d, 2)
+               group_lda = SIZE(data_d, 1)
+            END IF
+            batch_count = batch_count + 1
+            a_batch_ptrs(batch_count) = c_loc(data_d(1, 1))
+            b_batch_ptrs(batch_count) = c_loc(vec_b(coloff, 1))
+            c_batch_ptrs(batch_count) = c_loc(vec_c(rowoff, 1))
          ELSE
             CALL dgemv('N', SIZE(data_d, 1), SIZE(data_d, 2), &
                        my_alpha, data_d(1, 1), SIZE(data_d, 1), &
@@ -504,22 +529,40 @@ CONTAINS
                        1.0_dp, vec_c(rowoff, 1), 1)
          END IF
       END DO
+      CALL flush_dbcsr_batch(batch_count, group_transa, group_m, group_k, group_lda, my_alpha)
       CALL dbcsr_iterator_stop(iter)
 !$OMP     END PARALLEL
 
       ! FIXME ... in the symmetric case, the writes to vec_c depend on the column, not the row. This makes OMP-ing more difficult
       ! needs e.g. a buffer for vec_c and a reduction of that buffer.
       IF (has_symm) THEN
+         batch_count = 0
+         group_m = 0
+         group_k = 0
+         group_lda = 0
+         group_transa = 'T'
          CALL dbcsr_iterator_readonly_start(iter, matrix_a)
          DO WHILE (dbcsr_iterator_blocks_left(iter))
             CALL dbcsr_iterator_next_block(iter, row, col, data_d, row_offset=rowoff, col_offset=coloff)
             IF (row /= col) THEN
                IF (my_ncol /= 1) THEN
-                  CALL dgemm('T', 'N', &
-                             SIZE(data_d, 2), my_ncol, SIZE(data_d, 1), &
-                             my_alpha2, data_d(1, 1), SIZE(data_d, 1), &
-                             vec_b(rowoff, 1), SIZE(vec_b, 1), &
-                             1.0_dp, vec_c(coloff, 1), SIZE(vec_c, 1))
+                  IF (batch_count > 0 .AND. (SIZE(data_d, 2) /= group_m .OR. SIZE(data_d, 1) /= group_k .OR. &
+                                             SIZE(data_d, 1) /= group_lda .OR. group_transa /= 'T')) THEN
+                     CALL flush_dbcsr_batch(batch_count, group_transa, group_m, group_k, group_lda, my_alpha2)
+                  END IF
+                  IF (batch_count == sme_queue_max) THEN
+                     CALL flush_dbcsr_batch(batch_count, group_transa, group_m, group_k, group_lda, my_alpha2)
+                  END IF
+                  IF (batch_count == 0) THEN
+                     group_transa = 'T'
+                     group_m = SIZE(data_d, 2)
+                     group_k = SIZE(data_d, 1)
+                     group_lda = SIZE(data_d, 1)
+                  END IF
+                  batch_count = batch_count + 1
+                  a_batch_ptrs(batch_count) = c_loc(data_d(1, 1))
+                  b_batch_ptrs(batch_count) = c_loc(vec_b(rowoff, 1))
+                  c_batch_ptrs(batch_count) = c_loc(vec_c(coloff, 1))
                ELSE
                   CALL dgemv('T', SIZE(data_d, 1), SIZE(data_d, 2), &
                              my_alpha2, data_d(1, 1), SIZE(data_d, 1), &
@@ -528,10 +571,46 @@ CONTAINS
                END IF
             END IF
          END DO
+         CALL flush_dbcsr_batch(batch_count, group_transa, group_m, group_k, group_lda, my_alpha2)
          CALL dbcsr_iterator_stop(iter)
       END IF
 
       CALL timestop(timing_handle)
+
+   CONTAINS
+
+      SUBROUTINE flush_dbcsr_batch(count, transa, m, k, lda, alpha_scale)
+         INTEGER, INTENT(INOUT)                         :: count
+         CHARACTER(LEN=1), INTENT(IN)                   :: transa
+         INTEGER, INTENT(IN)                            :: m, k, lda
+         REAL(dp), INTENT(IN)                           :: alpha_scale
+
+         INTEGER                                        :: a_cols, i
+         LOGICAL                                        :: sme_ok
+
+         IF (count <= 0) RETURN
+
+         sme_ok = .FALSE.
+         IF (sme_batch_wants_sme(count)) THEN
+            CALL sme_batch_try_dgemm_colmajor_strided(transa, 'N', m, my_ncol, k, count, &
+                                                      a_batch_ptrs, lda, &
+                                                      b_batch_ptrs, SIZE(vec_b, 1), &
+                                                      c_batch_ptrs, SIZE(vec_c, 1), alpha_scale, .TRUE., sme_ok)
+         END IF
+
+         IF (.NOT. sme_ok) THEN
+            a_cols = MERGE(k, m, transa == 'N')
+            DO i = 1, count
+               CALL c_f_pointer(a_batch_ptrs(i), a_mat, [lda, a_cols])
+               CALL c_f_pointer(b_batch_ptrs(i), b_mat, [SIZE(vec_b, 1), my_ncol])
+               CALL c_f_pointer(c_batch_ptrs(i), c_mat, [SIZE(vec_c, 1), my_ncol])
+               CALL dgemm(transa, 'N', m, my_ncol, k, alpha_scale, a_mat(1, 1), lda, &
+                          b_mat(1, 1), SIZE(vec_b, 1), 1.0_dp, c_mat(1, 1), SIZE(vec_c, 1))
+            END DO
+         END IF
+
+         count = 0
+      END SUBROUTINE flush_dbcsr_batch
    END SUBROUTINE dbcsr_multiply_local
 
 ! **************************************************************************************************

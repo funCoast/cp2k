@@ -365,7 +365,7 @@ static void dbm_multiply_cpu_process_batch_sme(
     }
 
     const int ngroup = group_end - group_start;
-    if (ngroup >= 2) {
+    if (ngroup >= 4) {
       dbm_task_t group[ngroup];
       for (int i = 0; i < ngroup; ++i) {
         group[i] = batch[batch_order[group_start + i]];

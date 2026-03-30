@@ -19,6 +19,8 @@
 
 namespace {
 
+constexpr std::int64_t kMinSmeBatch = 4;
+
 std::mutex &log_mutex() {
   static std::mutex mutex;
   return mutex;
@@ -157,6 +159,11 @@ int dgemm_colmajor_impl(int transa, int transb, int m, int n, int k,
                         const cp2k_smegemm_backend fallback_backend,
                         const char *kind) {
   const auto mode = cp2k_smegemm_backend_from_env();
+  if (backend_attempts_sme(mode)) {
+    log_failure(kind, mode, "单次 GEMM 已禁用 SME；请使用 batch>=4 的批量路径",
+                fallback_backend);
+    return 0;
+  }
   if (!check_common_constraints(kind, mode, m, n, k, alpha, beta, a, b, c,
                                 fallback_backend)) {
     return 0;
@@ -196,6 +203,11 @@ int dgemm_rowmajor_impl(int transa, int transb, int m, int n, int k,
                         const cp2k_smegemm_backend fallback_backend,
                         const char *kind) {
   const auto mode = cp2k_smegemm_backend_from_env();
+  if (backend_attempts_sme(mode)) {
+    log_failure(kind, mode, "单次 GEMM 已禁用 SME；请使用 batch>=4 的批量路径",
+                fallback_backend);
+    return 0;
+  }
   if (!check_common_constraints(kind, mode, m, n, k, alpha, beta, a, b, c,
                                 fallback_backend)) {
     return 0;
@@ -249,6 +261,11 @@ int dgemm_rowmajor_batch_impl(int transa, int transb, int m, int n, int k,
     log_failure(kind, mode, "batch 必须为正", fallback_backend);
     return 0;
   }
+  if (batch < kMinSmeBatch) {
+    log_failure(kind, mode, "batch 太小；SME 仅用于 batch>=4 的批量路径",
+                fallback_backend);
+    return 0;
+  }
   if (a_array == nullptr || b_array == nullptr || c_array == nullptr) {
     log_failure(kind, mode, "batch 指针数组不能为空", fallback_backend);
     return 0;
@@ -299,6 +316,11 @@ int dgemm_colmajor_batch_impl(int transa, int transb, int m, int n, int k,
   }
   if (batch <= 0) {
     log_failure(kind, mode, "batch 必须为正", fallback_backend);
+    return 0;
+  }
+  if (batch < kMinSmeBatch) {
+    log_failure(kind, mode, "batch 太小；SME 仅用于 batch>=4 的批量路径",
+                fallback_backend);
     return 0;
   }
   if (a_array == nullptr || b_array == nullptr || c_array == nullptr) {
