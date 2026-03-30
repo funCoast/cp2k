@@ -143,6 +143,14 @@ static int dbm_multiply_cpu_process_sme_group(
       return 0;
     }
   }
+  // Extremely skinny micro-shapes are a poor fit for SME and, in practice on
+  // the current macOS/M4 Pro runtime, they can fault before producing useful
+  // throughput. Keep those on the fallback path and reserve SME for the
+  // genuinely matrix-shaped batches we want to accelerate.
+  if (task0.m <= 1 || task0.n <= 1 || task0.k <= 1) {
+    dbm_sme_debug("rejecting degenerate SME shape", ngroup, &task0);
+    return 0;
+  }
 
   // SME computes one compact output per task. We batch those outputs into a
   // temporary scratch buffer and then accumulate them back into the actual C
