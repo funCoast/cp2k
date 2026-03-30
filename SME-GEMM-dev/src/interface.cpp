@@ -7,12 +7,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <ratio>
 #include <stdexcept>
-#include <string>
 #include <unordered_map>
 #include <map>
 #include <utility>
@@ -39,42 +37,6 @@
 
 namespace
 {
-
-std::string normalize_env_token(const char *value)
-{
-    std::string token;
-    if (value == nullptr)
-    {
-        return token;
-    }
-    for (const unsigned char ch : std::string(value))
-    {
-        if (std::isspace(ch) || ch == '-' || ch == '_')
-        {
-            continue;
-        }
-        token.push_back(static_cast<char>(std::toupper(ch)));
-    }
-    return token;
-}
-
-bool parse_debug_env(const char *value)
-{
-    const std::string token = normalize_env_token(value);
-    if (token.empty())
-    {
-        return true;
-    }
-    if (token == "0" || token == "FALSE" || token == "OFF" || token == "NO")
-    {
-        return false;
-    }
-    if (token == "1" || token == "TRUE" || token == "ON" || token == "YES")
-    {
-        return true;
-    }
-    return true;
-}
 
 extern "C" __attribute__((naked)) void
 smelt_call_runtime_kernel_entry(void *entry,
@@ -212,7 +174,8 @@ TilePrimitiveDescriptor::TRANS_TYPE parse_trans(char transa, char transb)
 bool should_rearrange(SMELT::Strategy strategy, TilePrimitiveDescriptor::TRANS_TYPE trans_type)
 {
     if (strategy == SMELT::Strategy::SCALAR || strategy == SMELT::Strategy::SVE || strategy == SMELT::Strategy::SME2 ||
-        strategy == SMELT::Strategy::COSTMODEL || strategy == SMELT::Strategy::AUTO)
+        strategy == SMELT::Strategy::COSTMODEL || strategy == SMELT::Strategy::COSTMODEL2 ||
+        strategy == SMELT::Strategy::AUTO)
     {
         return false;
     }
@@ -243,7 +206,8 @@ std::pair<std::vector<TilePrimitiveDescriptor>, int> build_primitives(Frontend::
     {
     case SMELT::Strategy::AUTO:
     case SMELT::Strategy::COSTMODEL:
-        return generator.build_strategy_costmodel(fe);
+    case SMELT::Strategy::COSTMODEL2:
+        return generator.build_strategy_costmodel2(fe);
     case SMELT::Strategy::SCALAR:
         return generator.build_strategy_scalar(fe);
     case SMELT::Strategy::SVE:
@@ -356,6 +320,25 @@ std::shared_ptr<CompiledKernel> compile_kernel(int m,
     auto compiled = std::make_shared<CompiledKernel>();
     compiled->buffer = executable;
     compiled->entry = static_cast<char *>(executable->base) + sizeof(std::uint32_t);
+    if (SMELT::is_debug_enabled())
+    {
+        auto *u32 = static_cast<const std::uint32_t *>(executable->base);
+        std::fprintf(stderr,
+                     "[SMELT] compiled kernel m=%d n=%d k=%d dtype=%d trans=%d strategy=%d base=%p entry=%p insn0=0x%08x insn1=0x%08x insn2=0x%08x insn3=0x%08x\n",
+                     m,
+                     n,
+                     k,
+                     static_cast<int>(dtype),
+                     static_cast<int>(trans),
+                     static_cast<int>(strategy),
+                     executable->base,
+                     compiled->entry,
+                     u32[0],
+                     lowered.binary.size() > 0 ? u32[1] : 0u,
+                     lowered.binary.size() > 1 ? u32[2] : 0u,
+                     lowered.binary.size() > 2 ? u32[3] : 0u);
+        std::fflush(stderr);
+    }
     return compiled;
 }
 
@@ -453,14 +436,6 @@ void validate_blas_inputs(int m,
 
 namespace SMELT
 {
-
-bool is_debug_enabled()
-{
-    static std::once_flag once;
-    static bool enabled = true;
-    std::call_once(once, []() { enabled = parse_debug_env(std::getenv("CP2K_GEMM_DEBUG")); });
-    return enabled;
-}
 
 void set_runtime_config(const RuntimeConfig &config)
 {
@@ -582,19 +557,6 @@ void dgemm_batch(char transa,
     }
 }
 
-void dgemm_batch_colmajor(char transa,
-                          char transb,
-                          int m,
-                          int n,
-                          int k,
-                          std::int64_t batch,
-                          const double *const *a_array,
-                          const double *const *b_array,
-                          double *const *c_array) SMELT_SME_INOUT_ZA SMELT_SME_STREAMING_COMPAT
-{
-    dgemm_batch(transa, transb, m, n, k, batch, a_array, b_array, c_array);
-}
-
 void sgemm(char transa,
            char transb,
            int m,
@@ -658,19 +620,6 @@ void sgemm_batch(char transa,
     {
         exit_sme_context();
     }
-}
-
-void sgemm_batch_colmajor(char transa,
-                          char transb,
-                          int m,
-                          int n,
-                          int k,
-                          std::int64_t batch,
-                          const float *const *a_array,
-                          const float *const *b_array,
-                          float *const *c_array) SMELT_SME_INOUT_ZA SMELT_SME_STREAMING_COMPAT
-{
-    sgemm_batch(transa, transb, m, n, k, batch, a_array, b_array, c_array);
 }
 
 DgemmBatchKernelPtr get_dgemm_batch_kernel_ptr(char transa, char transb, int m, int n, int k, Strategy strategy)
