@@ -147,7 +147,7 @@ static int dbm_multiply_cpu_process_sme_group(
   // the current macOS/M4 Pro runtime, they can fault before producing useful
   // throughput. Keep those on the fallback path and reserve SME for the
   // genuinely matrix-shaped batches we want to accelerate.
-  if (task0.m <= 1 || task0.n <= 1 || task0.k <= 1) {
+  if (task0.m < 4 || task0.n < 4 || task0.k < 4) {
     dbm_sme_debug("rejecting degenerate SME shape", ngroup, &task0);
     return 0;
   }
