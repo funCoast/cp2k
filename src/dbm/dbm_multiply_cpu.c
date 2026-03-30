@@ -9,6 +9,7 @@
 
 #include <assert.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -86,6 +87,27 @@ static inline int dbm_sme_backend_enabled(void) {
          backend == CP2K_SMEGEMM_BACKEND_SME;
 }
 
+static inline int dbm_sme_debug_enabled(void) {
+  const char *env = getenv("CP2K_GEMM_DEBUG");
+  return env != NULL && env[0] != '\0' && strcmp(env, "0") != 0;
+}
+
+static void dbm_sme_debug(const char *message, const int ngroup,
+                          const dbm_task_t *task) {
+  if (!dbm_sme_debug_enabled()) {
+    return;
+  }
+  if (task != NULL) {
+    fprintf(stderr,
+            "[DBM SME] %s: batch=%d shape=(m=%d n=%d k=%d) offsets=(%d,%d,%d)\n",
+            message, ngroup, task->m, task->n, task->k, task->offset_a,
+            task->offset_b, task->offset_c);
+  } else {
+    fprintf(stderr, "[DBM SME] %s: batch=%d\n", message, ngroup);
+  }
+  fflush(stderr);
+}
+
 static void dbm_add_scratch_to_c(const dbm_task_t *task,
                                  const double alpha, const double *scratch,
                                  dbm_shard_t *shard_c) {
@@ -154,6 +176,7 @@ static int dbm_multiply_cpu_process_sme_group(
       CP2K_SMEGEMM_BACKEND_BLAS;
 #endif
 
+  dbm_sme_debug("calling cp2k_smegemm_dgemm_colmajor_batch", ngroup, &task0);
   const int ok = cp2k_smegemm_dgemm_colmajor_batch(
       'N', 'T', task0.m, task0.n, task0.k, ngroup, (const double *const *)a_array,
       (const double *const *)b_array, (double *const *)c_array, 1.0, 0.0,
@@ -165,6 +188,7 @@ static int dbm_multiply_cpu_process_sme_group(
     free(c_array);
     return 0;
   }
+  dbm_sme_debug("cp2k_smegemm_dgemm_colmajor_batch returned", ngroup, &task0);
 
   for (int i = 0; i < ngroup; ++i) {
     dbm_add_scratch_to_c(&group[i], alpha,
@@ -380,12 +404,14 @@ static void dbm_multiply_cpu_process_batch_sme(
     }
 
     if (ngroup >= 4) {
+      dbm_sme_debug("trying SME group", ngroup, &group[0]);
       if (dbm_multiply_cpu_process_sme_group(ngroup, group, alpha, pack_a,
                                              pack_b, shard_c, options)) {
         free(group);
         group_start = group_end;
         continue;
       }
+      dbm_sme_debug("SME group fell back", ngroup, &group[0]);
     }
 
     // Fallback to the existing CPU path for this shape group.
