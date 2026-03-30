@@ -365,27 +365,33 @@ static void dbm_multiply_cpu_process_batch_sme(
     }
 
     const int ngroup = group_end - group_start;
-    if (ngroup >= 4) {
-      dbm_task_t group[ngroup];
+    dbm_task_t *group = malloc((size_t)ngroup * sizeof(dbm_task_t));
+    if (group == NULL) {
       for (int i = 0; i < ngroup; ++i) {
-        group[i] = batch[batch_order[group_start + i]];
+        const dbm_task_t single_task = batch[batch_order[group_start + i]];
+        dbm_multiply_cpu_process_batch_impl(1, &single_task, alpha, pack_a,
+                                            pack_b, shard_c, options);
       }
+      group_start = group_end;
+      continue;
+    }
+    for (int i = 0; i < ngroup; ++i) {
+      group[i] = batch[batch_order[group_start + i]];
+    }
+
+    if (ngroup >= 4) {
       if (dbm_multiply_cpu_process_sme_group(ngroup, group, alpha, pack_a,
                                              pack_b, shard_c, options)) {
+        free(group);
         group_start = group_end;
         continue;
       }
     }
 
     // Fallback to the existing CPU path for this shape group.
-    {
-      dbm_task_t group[ngroup];
-      for (int i = 0; i < ngroup; ++i) {
-        group[i] = batch[batch_order[group_start + i]];
-      }
-      dbm_multiply_cpu_process_batch_impl(ngroup, group, alpha, pack_a, pack_b,
-                                          shard_c, options);
-    }
+    dbm_multiply_cpu_process_batch_impl(ngroup, group, alpha, pack_a, pack_b,
+                                        shard_c, options);
+    free(group);
     group_start = group_end;
   }
 }
